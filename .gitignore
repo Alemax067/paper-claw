@@ -28,3 +28,5 @@ backend/.venv/
 data/*
 !data/.gitkeep
 
+# Notebook
+notebooks/

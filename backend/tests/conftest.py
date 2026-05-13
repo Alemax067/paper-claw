@@ -18,11 +18,18 @@ def engine():
     engine.dispose()
 
 
+def reset_schema(engine) -> None:
+    with engine.begin() as connection:
+        connection.execute(text("DROP SCHEMA public CASCADE"))
+        connection.execute(text("CREATE SCHEMA public"))
+        connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+
+
 @pytest.fixture()
 def session(engine):
-    Base.metadata.drop_all(engine)
+    reset_schema(engine)
     Base.metadata.create_all(engine)
     with Session(engine, expire_on_commit=False) as session:
         yield session
         session.rollback()
-    Base.metadata.drop_all(engine)
+    reset_schema(engine)
