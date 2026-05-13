@@ -1,0 +1,35 @@
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
+
+from backend.agents.runner import cancel_run, list_run_events, submit_agent_message
+from backend.api.deps import get_db_session
+from backend.schemas import AgentMessageRequest, AgentMessageResponse, RunEventRead, RunRead
+
+router = APIRouter(tags=["agent"])
+
+
+@router.post("/agent/messages", response_model=AgentMessageResponse)
+def post_agent_message(request: AgentMessageRequest, session: Session = Depends(get_db_session)) -> AgentMessageResponse:
+    return submit_agent_message(session, request)
+
+
+@router.get("/agent/runs/{run_id}/events", response_model=list[RunEventRead])
+def get_run_events(
+    run_id: int,
+    after_sequence: int | None = Query(default=None),
+    session: Session = Depends(get_db_session),
+) -> list[RunEventRead]:
+    try:
+        return list_run_events(session, run_id, after_sequence)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/agent/runs/{run_id}/cancel", response_model=RunRead)
+def post_cancel_run(run_id: int, session: Session = Depends(get_db_session)) -> RunRead:
+    try:
+        return cancel_run(session, run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
