@@ -13,6 +13,7 @@ __pycache__/
 coverage.xml
 dist/
 build/
+logs/
 
 # Reference directories kept outside the new repo history.
 deepagents/

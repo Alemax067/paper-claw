@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
+from uuid import uuid4
 
 from langchain_core.rate_limiters import InMemoryRateLimiter
 from sqlalchemy import select
@@ -10,7 +11,7 @@ from sqlalchemy.orm import Session
 from backend.agents.context import PaperClawContext
 from backend.agents.main_agent import create_paper_claw_agent
 from backend.api.serializers import run_event_read, run_read
-from backend.db.models import AgentRun, AgentRunEvent
+from backend.db.models import AgentRun, AgentRunEvent, Thread
 from backend.db.repositories import AgentRunRepository, ThreadRepository
 from backend.db.types import EventLevel, MessageRole, MessageSource, RunStatus, WorkflowName
 from backend.schemas import AgentMessageRequest, AgentMessageResponse, RunEventRead, RunRead
@@ -24,12 +25,15 @@ def submit_agent_message(session: Session, request: AgentMessageRequest) -> Agen
     if request.thread_id is not None and thread is None:
         raise ValueError("Thread not found")
     if thread is None:
-        thread = threads.create(_thread_title(request.message))
+        thread = threads.create(_thread_title(request.message), deepagent_thread_id=_new_deepagent_thread_id())
+    elif thread.deepagent_thread_id is None:
+        thread.deepagent_thread_id = _new_deepagent_thread_id()
     threads.add_message(thread.id, MessageRole.user.value, request.message, source=MessageSource.human.value)
     run = runs.create(
         WorkflowName.paper_qa.value,
         thread_id=thread.id,
         status=RunStatus.running.value,
+        deepagent_thread_id=thread.deepagent_thread_id,
         started_at=datetime.now().astimezone(),
         input_json=_run_input(request),
     )
@@ -90,9 +94,24 @@ def cancel_run(session: Session, run_id: int) -> RunRead:
 
 
 def _invoke_agent(thread_id: int, run_id: int, request: AgentMessageRequest, session: Session) -> Any:
+    thread = session.get_one(Thread, thread_id)
+    if thread.deepagent_thread_id is None:
+        thread.deepagent_thread_id = _new_deepagent_thread_id()
+        session.flush()
     agent = create_paper_claw_agent()
     context = _agent_context(thread_id, run_id, request, session)
-    return agent.invoke({"messages": [{"role": "user", "content": request.message}]}, context=context)
+    return agent.invoke(
+        {"messages": [{"role": "user", "content": request.message}]},
+        config={
+            "configurable": {"thread_id": thread.deepagent_thread_id},
+            "metadata": {
+                "assistant_id": "paper-claw",
+                "paper_claw_thread_id": thread.id,
+                "paper_claw_run_id": run_id,
+            },
+        },
+        context=context,
+    )
 
 
 def _agent_context(thread_id: int, run_id: int, request: AgentMessageRequest, session: Session) -> PaperClawContext:
@@ -146,6 +165,10 @@ def _chat_rate_limiter(settings: Settings) -> InMemoryRateLimiter | None:
 def _thread_title(message: str) -> str:
     title = " ".join(message.strip().split())[:80]
     return title or "New thread"
+
+
+def _new_deepagent_thread_id() -> str:
+    return f"paper-claw-thread-{uuid4()}"
 
 
 def _run_input(request: AgentMessageRequest) -> dict[str, Any]:

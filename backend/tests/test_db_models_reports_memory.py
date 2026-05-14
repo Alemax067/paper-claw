@@ -23,10 +23,12 @@ def test_report_evidence_and_memory(session):
         quote_text="evidence",
     )
     memory = Memory(
+        path=f"/memories/papers/{paper.id}/fixture-note.md",
+        title="fixture-note",
         memory_type=MemoryType.paper_note.value,
-        name="fixture-note",
-        content="Remember this fixture paper.",
+        content_text="Remember this fixture paper.",
         source_paper_id=paper.id,
+        paper_id=paper.id,
     )
     session.add_all([evidence, memory])
     session.commit()

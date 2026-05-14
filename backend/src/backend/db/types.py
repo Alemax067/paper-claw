@@ -234,13 +234,30 @@ class EvidenceType(StrEnum):
 
 
 class MemoryType(StrEnum):
-    preference = "preference"
-    project = "project"
+    user_preference = "user_preference"
+    instruction = "instruction"
+    research_note = "research_note"
     paper_note = "paper_note"
+    project_state = "project_state"
     feedback = "feedback"
     reference = "reference"
+
+
+class MemoryScope(StrEnum):
+    global_ = "global"
+    paper = "paper"
+    project = "project"
+    thread = "thread"
+
+
+class MemorySource(StrEnum):
+    user = "user"
+    agent = "agent"
+    tool = "tool"
+    system = "system"
 
 
 class MemoryStatus(StrEnum):
     active = "active"
     archived = "archived"
+    deleted = "deleted"

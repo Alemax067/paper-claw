@@ -13,8 +13,8 @@ class FakeAgent:
         self.output = output
         self.calls = []
 
-    def invoke(self, payload, *, context):
-        self.calls.append((payload, context))
+    def invoke(self, payload, *, context, config=None):
+        self.calls.append((payload, context, config))
         if isinstance(self.output, Exception):
             raise self.output
         return self.output
@@ -36,6 +36,11 @@ def test_post_agent_message_creates_thread_messages_run_and_events(client, sessi
     assert fake_agent.calls[0][1].model == "test-model"
     assert fake_agent.calls[0][1].api_key == "secret"
     run = session.get(AgentRun, payload["run_id"])
+    thread = session.get(Thread, payload["thread_id"])
+    assert thread.deepagent_thread_id is not None
+    assert run.deepagent_thread_id == thread.deepagent_thread_id
+    assert fake_agent.calls[0][2]["configurable"]["thread_id"] == thread.deepagent_thread_id
+    assert fake_agent.calls[0][2]["metadata"]["paper_claw_run_id"] == run.id
     assert run.status == RunStatus.succeeded.value
     assert run.input_json["has_api_key"] is True
     assert "api_key" not in run.input_json
@@ -55,6 +60,8 @@ def test_post_agent_message_reuses_existing_thread(client, session, monkeypatch)
 
     assert response.status_code == 200
     assert response.json()["thread_id"] == thread.id
+    session.refresh(thread)
+    assert thread.deepagent_thread_id is not None
 
 
 def test_post_agent_message_uses_settings_chat_provider(client, monkeypatch):

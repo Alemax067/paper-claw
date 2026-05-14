@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from pydantic import BaseModel
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
+from backend.agents.checkpointing import _psycopg_connection_string
 from backend.agents.main_agent import create_paper_claw_agent
-from backend.agents.model import apply_runtime_model
+from backend.agents.model import _json_safe, apply_runtime_model
 from backend.agents.subagents import create_paper_claw_subagents
 from backend.schemas import PaperClawContext
 
@@ -23,6 +25,20 @@ def test_agent_factory_constructs_without_external_model_call():
 
     assert hasattr(agent, "invoke")
     assert hasattr(agent, "stream")
+
+
+def test_checkpoint_connection_string_uses_psycopg_driver_url():
+    assert (
+        _psycopg_connection_string("postgresql+psycopg://paper_claw:paper_claw@localhost:5432/paper_claw")
+        == "postgresql://paper_claw:paper_claw@localhost:5432/paper_claw"
+    )
+
+
+def test_json_safe_serializes_model_classes_without_calling_model_dump():
+    class ToolArgs(BaseModel):
+        query: str
+
+    assert _json_safe({"args_schema": ToolArgs}) == {"args_schema": "ToolArgs"}
 
 
 def test_model_middleware_forwards_runtime_context(monkeypatch):
