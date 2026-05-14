@@ -5,6 +5,7 @@ from langchain_core.messages import AIMessage
 from backend.db.models import AgentRun, Message, Thread
 from backend.db.repositories import AgentRunRepository
 from backend.db.types import MessageRole, RunStatus, WorkflowName
+from backend.settings import clear_settings_cache
 
 
 class FakeAgent:
@@ -50,16 +51,58 @@ def test_post_agent_message_reuses_existing_thread(client, session, monkeypatch)
     session.commit()
     monkeypatch.setattr("backend.agents.runner.create_paper_claw_agent", lambda: FakeAgent({"messages": [AIMessage(content="ok")]}))
 
-    response = client.post("/api/agent/messages", json={"thread_id": thread.id, "message": "Continue"})
+    response = client.post("/api/agent/messages", json={"thread_id": thread.id, "message": "Continue", "model": "test-model"})
 
     assert response.status_code == 200
     assert response.json()["thread_id"] == thread.id
 
 
+def test_post_agent_message_uses_settings_chat_provider(client, monkeypatch):
+    monkeypatch.setenv("PAPER_CLAW_CHAT_MODEL", "openai:gpt-4o-mini")
+    monkeypatch.setenv("PAPER_CLAW_CHAT_API_KEY", "secret-value")
+    monkeypatch.setenv("PAPER_CLAW_CHAT_BASE_URL", "https://example.invalid/v1")
+    monkeypatch.setenv("PAPER_CLAW_CHAT_TEMPERATURE", "0.4")
+    monkeypatch.setenv("PAPER_CLAW_CHAT_TIMEOUT_SECONDS", "33")
+    monkeypatch.setenv("PAPER_CLAW_CHAT_MAX_RETRIES", "3")
+    clear_settings_cache()
+    fake_agent = FakeAgent({"messages": [AIMessage(content="ok")]})
+    monkeypatch.setattr("backend.agents.runner.create_paper_claw_agent", lambda: fake_agent)
+
+    try:
+        response = client.post("/api/agent/messages", json={"message": "Use settings"})
+    finally:
+        clear_settings_cache()
+
+    assert response.status_code == 200
+    context = fake_agent.calls[0][1]
+    assert context.model == "openai:gpt-4o-mini"
+    assert context.api_key == "secret-value"
+    assert context.base_url == "https://example.invalid/v1"
+    assert context.temperature == 0.4
+    assert context.timeout == 33
+    assert context.max_retries == 3
+
+
+def test_post_agent_message_reports_missing_chat_model(client, monkeypatch):
+    monkeypatch.setenv("PAPER_CLAW_CHAT_MODEL", " ")
+    clear_settings_cache()
+    monkeypatch.setattr("backend.agents.runner.create_paper_claw_agent", lambda: FakeAgent({"messages": [AIMessage(content="ok")]}))
+
+    try:
+        response = client.post("/api/agent/messages", json={"message": "Use settings"})
+    finally:
+        clear_settings_cache()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == RunStatus.failed.value
+    assert "PAPER_CLAW_CHAT_MODEL" in payload["error"]
+
+
 def test_post_agent_message_failure_marks_run_failed(client, session, monkeypatch):
     monkeypatch.setattr("backend.agents.runner.create_paper_claw_agent", lambda: FakeAgent(RuntimeError("model failed")))
 
-    response = client.post("/api/agent/messages", json={"message": "fail"})
+    response = client.post("/api/agent/messages", json={"message": "fail", "model": "test-model"})
 
     assert response.status_code == 200
     payload = response.json()

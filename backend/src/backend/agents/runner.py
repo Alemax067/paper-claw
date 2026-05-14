@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from langchain_core.rate_limiters import InMemoryRateLimiter
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -13,6 +14,7 @@ from backend.db.models import AgentRun, AgentRunEvent
 from backend.db.repositories import AgentRunRepository, ThreadRepository
 from backend.db.types import EventLevel, MessageRole, MessageSource, RunStatus, WorkflowName
 from backend.schemas import AgentMessageRequest, AgentMessageResponse, RunEventRead, RunRead
+from backend.settings import Settings, get_settings
 
 
 def submit_agent_message(session: Session, request: AgentMessageRequest) -> AgentMessageResponse:
@@ -35,7 +37,7 @@ def submit_agent_message(session: Session, request: AgentMessageRequest) -> Agen
     session.commit()
 
     try:
-        output = _invoke_agent(thread.id, run.id, request)
+        output = _invoke_agent(thread.id, run.id, request, session)
         message_text = _assistant_text(output)
         assistant_message = threads.add_message(
             thread.id,
@@ -87,22 +89,58 @@ def cancel_run(session: Session, run_id: int) -> RunRead:
     return run_read(run)
 
 
-def _invoke_agent(thread_id: int, run_id: int, request: AgentMessageRequest) -> Any:
+def _invoke_agent(thread_id: int, run_id: int, request: AgentMessageRequest, session: Session) -> Any:
     agent = create_paper_claw_agent()
-    context = PaperClawContext(
+    context = _agent_context(thread_id, run_id, request, session)
+    return agent.invoke({"messages": [{"role": "user", "content": request.message}]}, context=context)
+
+
+def _agent_context(thread_id: int, run_id: int, request: AgentMessageRequest, session: Session) -> PaperClawContext:
+    settings = get_settings()
+    if request.model is not None:
+        model = request.model
+        api_key = request.api_key
+        base_url = request.base_url
+        temperature = request.temperature
+        max_tokens = request.max_tokens
+        timeout = request.timeout
+        max_retries = request.max_retries
+        provider_name = request.chat_provider_name
+    else:
+        model = settings.chat_model
+        api_key = request.api_key or settings.chat_api_key
+        base_url = request.base_url or settings.chat_base_url
+        temperature = request.temperature if request.temperature != 0.2 else settings.chat_temperature
+        max_tokens = request.max_tokens if request.max_tokens != 4096 else settings.chat_max_tokens
+        timeout = request.timeout if request.timeout != 60 else settings.chat_timeout_seconds
+        max_retries = request.max_retries if request.max_retries != 2 else settings.chat_max_retries
+        provider_name = "settings-chat"
+    if not model or not model.strip():
+        raise ValueError("PAPER_CLAW_CHAT_MODEL is not set.")
+    return PaperClawContext(
         thread_id=thread_id,
         run_id=run_id,
         active_paper_id=request.active_paper_id,
-        model=request.model,
-        api_key=request.api_key,
-        base_url=request.base_url,
-        temperature=request.temperature,
-        max_tokens=request.max_tokens,
-        timeout=request.timeout,
-        max_retries=request.max_retries,
-        chat_provider_name=request.chat_provider_name,
+        model=model,
+        api_key=api_key,
+        base_url=base_url,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        timeout=timeout,
+        max_retries=max_retries,
+        rate_limiter=_chat_rate_limiter(settings),
+        chat_provider_name=provider_name,
     )
-    return agent.invoke({"messages": [{"role": "user", "content": request.message}]}, context=context)
+
+
+def _chat_rate_limiter(settings: Settings) -> InMemoryRateLimiter | None:
+    if settings.chat_rate_limiter_requests_per_second is None:
+        return None
+    return InMemoryRateLimiter(
+        requests_per_second=settings.chat_rate_limiter_requests_per_second,
+        check_every_n_seconds=settings.chat_rate_limiter_check_every_n_seconds,
+        max_bucket_size=settings.chat_rate_limiter_max_bucket_size,
+    )
 
 
 def _thread_title(message: str) -> str:

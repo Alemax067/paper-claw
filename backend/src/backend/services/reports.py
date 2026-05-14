@@ -5,10 +5,10 @@ from sqlalchemy.orm import Session
 
 from backend.db.models import DocumentChunk, Paper, ProcessedDocument, Report
 from backend.db.repositories import ReportRepository
-from backend.db.types import EvidenceType, ProviderKind, ReportSourceScope, ReportStatus, ReportType
+from backend.db.types import EvidenceType, ReportSourceScope, ReportStatus, ReportType
 from backend.integrations.llm import ChatModelAdapter, FixtureChatModelAdapter, OpenAICompatibleChatModelAdapter
 from backend.schemas import ReportGenerationResult, ResolvedProviderConfig, RetrievedChunk
-from backend.services.providers import resolve_provider_config
+from backend.services.providers import chat_provider_from_settings
 from backend.services.retrieval import RetrievalService
 
 
@@ -19,9 +19,11 @@ class ReportGenerationService:
         *,
         retrieval_service: RetrievalService | None = None,
         adapters: dict[str, ChatModelAdapter] | None = None,
+        chat_provider: ResolvedProviderConfig | None = None,
     ) -> None:
         self.session = session
         self.retrieval_service = retrieval_service or RetrievalService(session)
+        self.chat_provider = chat_provider
         self.adapters = adapters or {
             "fixture": FixtureChatModelAdapter(),
             "openai_compatible": OpenAICompatibleChatModelAdapter(),
@@ -60,7 +62,7 @@ class ReportGenerationService:
             source_scope=source_scope,
         )
         try:
-            provider = resolve_provider_config(self.session, ProviderKind.chat.value, provider_name)
+            provider = self.chat_provider or chat_provider_from_settings()
             evidence = self._select_evidence(paper.id, processed, source_scope, query or instructions or paper.title, selected_chunk_ids, limit)
             markdown = self._adapter_for(provider).generate_text(provider, _messages(paper.title, instructions, evidence, processed))
             evidence_ids = self._persist_evidence(report.id, evidence, paper.id)

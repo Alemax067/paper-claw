@@ -2,27 +2,27 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from backend.db.models import Paper, ProviderConfig, Report, ReportEvidence
+from backend.db.models import Paper, Report, ReportEvidence
 from backend.db.repositories import ParsingRepository
-from backend.db.types import ProcessedDocumentStatus, ProviderKind, ReportSourceScope, ReportStatus, SectionRole
+from backend.db.types import ProcessedDocumentStatus, ReportSourceScope, ReportStatus, SectionRole
 from backend.integrations.llm.openai_compatible import OpenAICompatibleChatModelAdapter
 from backend.schemas import ResolvedProviderConfig
 from backend.services.reports import ReportGenerationService
 
 
-def add_chat_provider(session, *, provider="fixture"):
-    config = ProviderConfig(
+def fixture_chat_provider() -> ResolvedProviderConfig:
+    return ResolvedProviderConfig(
+        id=0,
         name="fixture-chat",
-        kind=ProviderKind.chat.value,
-        provider=provider,
-        enabled=True,
-        is_default=True,
+        kind="chat",
+        provider="fixture",
         model="fixture-chat-model",
-        settings_json={"title": "Generated Fixture Report"},
+        settings={"title": "Generated Fixture Report"},
     )
-    session.add(config)
-    session.commit()
-    return config
+
+
+def report_service(session) -> ReportGenerationService:
+    return ReportGenerationService(session, chat_provider=fixture_chat_provider())
 
 
 def create_processed_paper(session):
@@ -47,12 +47,11 @@ def create_processed_paper(session):
 
 
 def test_generate_report_fails_cleanly_without_processed_document(session):
-    add_chat_provider(session)
     paper = Paper(title="Unprocessed")
     session.add(paper)
     session.commit()
 
-    result = ReportGenerationService(session).generate_report(paper.id)
+    result = report_service(session).generate_report(paper.id)
 
     assert result.status == ReportStatus.failed.value
     report = session.get(Report, result.report_id)
@@ -60,10 +59,9 @@ def test_generate_report_fails_cleanly_without_processed_document(session):
 
 
 def test_fixture_llm_generates_report_and_persists_evidence(session):
-    add_chat_provider(session)
     paper, _, chunks = create_processed_paper(session)
 
-    result = ReportGenerationService(session).generate_report(
+    result = report_service(session).generate_report(
         paper.id,
         instructions="Discuss retrieval evidence.",
         source_scope=ReportSourceScope.selected_chunks.value,
@@ -79,10 +77,9 @@ def test_fixture_llm_generates_report_and_persists_evidence(session):
 
 
 def test_retrieval_selects_evidence_chunks(session):
-    add_chat_provider(session)
     paper, _, _ = create_processed_paper(session)
 
-    result = ReportGenerationService(session).generate_report(paper.id, instructions="citation reference", limit=1)
+    result = report_service(session).generate_report(paper.id, instructions="citation reference", limit=1)
 
     report = session.get(Report, result.report_id)
     assert result.status == ReportStatus.succeeded.value
@@ -91,10 +88,9 @@ def test_retrieval_selects_evidence_chunks(session):
 
 
 def test_full_document_scope_uses_ordered_chunks(session):
-    add_chat_provider(session)
     paper, _, chunks = create_processed_paper(session)
 
-    result = ReportGenerationService(session).generate_report(paper.id, source_scope=ReportSourceScope.full_document.value, limit=2)
+    result = report_service(session).generate_report(paper.id, source_scope=ReportSourceScope.full_document.value, limit=2)
 
     report = session.get(Report, result.report_id)
     assert [evidence.chunk_id for evidence in report.evidence] == [chunks[0].id, chunks[1].id]

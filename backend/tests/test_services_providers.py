@@ -5,7 +5,7 @@ import pytest
 from backend.db.models import ProviderConfig
 from backend.db.types import ProviderKind, ProviderName
 from backend.schemas import ProviderResolutionError
-from backend.services.providers import resolve_api_key, resolve_provider_config
+from backend.services.providers import chat_provider_from_settings, embedding_provider_from_settings, resolve_api_key, resolve_provider_config
 from backend.settings import REPO_ROOT, Settings
 
 
@@ -105,3 +105,49 @@ def test_settings_default_storage_root():
     assert REPO_ROOT.name == "paper-claw"
     assert settings.data_dir == REPO_ROOT / "data"
     assert settings.storage_root == REPO_ROOT / "data" / "files"
+
+
+def test_settings_load_model_environment(monkeypatch):
+    monkeypatch.setenv("PAPER_CLAW_CHAT_MODEL", "openai:gpt-test")
+    monkeypatch.setenv("PAPER_CLAW_CHAT_API_KEY", "chat-secret")
+    monkeypatch.setenv("PAPER_CLAW_CHAT_BASE_URL", "https://chat.example/v1")
+    monkeypatch.setenv("PAPER_CLAW_CHAT_RATE_LIMITER_REQUESTS_PER_SECOND", "1.5")
+    monkeypatch.setenv("PAPER_CLAW_CHAT_RATE_LIMITER_CHECK_EVERY_N_SECONDS", "0.2")
+    monkeypatch.setenv("PAPER_CLAW_CHAT_RATE_LIMITER_MAX_BUCKET_SIZE", "7")
+    monkeypatch.setenv("PAPER_CLAW_EMBEDDING_MODEL", "embed-test")
+    monkeypatch.setenv("PAPER_CLAW_EMBEDDING_DIMENSION", "1536")
+    monkeypatch.setenv("PAPER_CLAW_LOCAL_OCR_MODEL", "ocr-test")
+    monkeypatch.setenv("PAPER_CLAW_LLAMA_PARSE_VERSION", "v2")
+
+    settings = Settings()
+
+    assert settings.chat_model == "openai:gpt-test"
+    assert settings.chat_api_key == "chat-secret"
+    assert settings.chat_base_url == "https://chat.example/v1"
+    assert settings.chat_rate_limiter_requests_per_second == 1.5
+    assert settings.chat_rate_limiter_check_every_n_seconds == 0.2
+    assert settings.chat_rate_limiter_max_bucket_size == 7
+    assert settings.embedding_model == "embed-test"
+    assert settings.embedding_dimension == 1536
+    assert settings.local_ocr_model == "ocr-test"
+    assert settings.llama_parse_version == "v2"
+
+
+def test_settings_derived_providers(monkeypatch):
+    monkeypatch.setenv("PAPER_CLAW_CHAT_MODEL", "openai:gpt-test")
+    monkeypatch.setenv("PAPER_CLAW_CHAT_API_KEY", "chat-secret")
+    monkeypatch.setenv("PAPER_CLAW_EMBEDDING_MODEL", "embed-test")
+    monkeypatch.setenv("PAPER_CLAW_EMBEDDING_API_KEY", "embed-secret")
+    monkeypatch.setenv("PAPER_CLAW_EMBEDDING_DIMENSION", "12")
+    settings = Settings()
+
+    chat = chat_provider_from_settings(settings)
+    embedding = embedding_provider_from_settings(settings)
+
+    assert chat.name == "settings-chat"
+    assert chat.model == "openai:gpt-test"
+    assert chat.api_key == "chat-secret"
+    assert embedding.name == "settings-embedding"
+    assert embedding.model == "embed-test"
+    assert embedding.api_key == "embed-secret"
+    assert embedding.settings["dimension"] == 12

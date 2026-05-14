@@ -13,7 +13,7 @@ class OpenAICompatibleChatModelAdapter:
         self.client = client
 
     def generate_text(self, provider: ResolvedProviderConfig, messages: list[dict]) -> str:
-        client = self.client or OpenAI(api_key=resolve_api_key(provider.api_key_ref), base_url=provider.base_url)
+        client = self.client or OpenAI(api_key=provider.api_key or resolve_api_key(provider.api_key_ref), base_url=provider.base_url)
         response = client.chat.completions.create(
             model=provider.model,
             messages=messages,

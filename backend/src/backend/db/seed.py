@@ -3,9 +3,9 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend.db.models import Paper, PaperIdentifier, ProviderConfig, Thread
-from backend.db.repositories import PaperRepository, ParsingRepository, ProviderConfigRepository, ThreadRepository
-from backend.db.types import IdentifierType, PaperSource, ProcessedDocumentStatus, ProviderKind, ProviderName, SectionRole
+from backend.db.models import Paper, PaperIdentifier, Thread
+from backend.db.repositories import PaperRepository, ParsingRepository, ThreadRepository
+from backend.db.types import IdentifierType, PaperSource, ProcessedDocumentStatus, SectionRole
 
 
 FIXTURE_PAPERS = [
@@ -34,22 +34,9 @@ FIXTURE_PAPERS = [
 
 
 def seed_minimal_database(session: Session) -> None:
-    providers = ProviderConfigRepository(session)
     threads = ThreadRepository(session)
     papers = PaperRepository(session)
     parsing = ParsingRepository(session)
-
-    if session.scalar(select(ProviderConfig).where(ProviderConfig.kind == ProviderKind.chat.value)) is None:
-        providers.create(
-            name="default-chat",
-            kind=ProviderKind.chat.value,
-            provider=ProviderName.openai_compatible.value,
-            is_default=True,
-            model="openai:gpt-4o-mini",
-            api_key_ref="env:PAPER_CLAW_CHAT_API_KEY",
-            temperature=0.2,
-            settings_json={"max_retries": 2, "timeout": 60},
-        )
 
     if session.scalar(select(Thread).where(Thread.title == "Fixture database smoke thread")) is None:
         threads.create(title="Fixture database smoke thread", surface="cli", metadata_json={"fixture": True})

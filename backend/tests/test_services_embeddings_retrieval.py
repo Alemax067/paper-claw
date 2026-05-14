@@ -1,25 +1,26 @@
 from __future__ import annotations
 
-from backend.db.models import Paper, ProviderConfig
+from backend.db.models import Paper
 from backend.db.repositories import ParsingRepository
-from backend.db.types import ProcessedDocumentStatus, ProviderKind, SectionRole
+from backend.db.types import ProcessedDocumentStatus, SectionRole
+from backend.schemas import ResolvedProviderConfig
 from backend.services.embeddings import EmbeddingService
 from backend.services.retrieval import RetrievalService
 
 
-def add_embedding_provider(session, *, dimension: int = 3):
-    provider = ProviderConfig(
+def fixture_embedding_provider(*, dimension: int = 3) -> ResolvedProviderConfig:
+    return ResolvedProviderConfig(
+        id=0,
         name="fixture-embedding",
-        kind=ProviderKind.embedding.value,
+        kind="embedding",
         provider="fixture",
-        enabled=True,
-        is_default=True,
         model="fixture-embedding-v1",
-        settings_json={"dimension": dimension},
+        settings={"dimension": dimension},
     )
-    session.add(provider)
-    session.commit()
-    return provider
+
+
+def embedding_service(session, *, dimension: int = 3) -> EmbeddingService:
+    return EmbeddingService(session, embedding_provider=fixture_embedding_provider(dimension=dimension))
 
 
 def create_processed_chunks(session):
@@ -45,10 +46,9 @@ def create_processed_chunks(session):
 
 
 def test_fixture_embeddings_persist_to_chunks(session):
-    add_embedding_provider(session)
     paper, chunks = create_processed_chunks(session)
 
-    count = EmbeddingService(session).embed_missing_chunks(paper.id)
+    count = embedding_service(session).embed_missing_chunks(paper.id)
 
     assert count == 3
     for chunk in chunks:
@@ -58,33 +58,30 @@ def test_fixture_embeddings_persist_to_chunks(session):
 
 
 def test_embed_missing_chunks_skips_existing_vectors(session):
-    add_embedding_provider(session)
     paper, chunks = create_processed_chunks(session)
     chunks[0].embedding = [1.0, 0.0, 0.0]
     chunks[0].embedding_model = "manual"
     chunks[0].embedding_dimension = 3
     session.commit()
 
-    count = EmbeddingService(session).embed_missing_chunks(paper.id)
+    count = embedding_service(session).embed_missing_chunks(paper.id)
 
     assert count == 2
     assert chunks[0].embedding_model == "manual"
 
 
 def test_vector_retrieval_ranks_expected_chunk(session):
-    add_embedding_provider(session)
     paper, _ = create_processed_chunks(session)
-    embedding_service = EmbeddingService(session)
-    embedding_service.embed_missing_chunks(paper.id)
+    service = embedding_service(session)
+    service.embed_missing_chunks(paper.id)
 
-    results = RetrievalService(session, embedding_service).retrieve(paper.id, "retrieval evidence", limit=2)
+    results = RetrievalService(session, service).retrieve(paper.id, "retrieval evidence", limit=2)
 
     assert results[0].metadata["chunk_key"] == "alpha"
     assert results[0].retrieval_mode == "vector"
 
 
 def test_lexical_fallback_without_embeddings(session):
-    add_embedding_provider(session)
     paper, _ = create_processed_chunks(session)
 
     results = RetrievalService(session).retrieve(paper.id, "citation bibliography", limit=1)
@@ -94,10 +91,9 @@ def test_lexical_fallback_without_embeddings(session):
 
 
 def test_embedding_dimension_from_provider_settings(session):
-    add_embedding_provider(session, dimension=5)
     paper, chunks = create_processed_chunks(session)
 
-    EmbeddingService(session).embed_missing_chunks(paper.id)
+    embedding_service(session, dimension=5).embed_missing_chunks(paper.id)
 
     assert chunks[0].embedding_dimension == 5
     assert len(chunks[0].embedding) == 5

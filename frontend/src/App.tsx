@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { api } from './api/client';
 import { AppShell } from './components/AppShell';
 import { ErrorBanner } from './components/ErrorBanner';
@@ -24,11 +24,13 @@ export function App() {
   const [activeRun, setActiveRun] = useState<RunRead | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
   const [globalError, setGlobalError] = useState<string | null>(null);
+  const refreshedTerminalRunIds = useRef(new Set<number>());
 
   const requestRefresh = useCallback(() => setRefreshToken((value) => value + 1), []);
   const onRunUpdated = useCallback((run: RunRead | null) => {
     setActiveRun(run);
-    if (run && terminalRunStatuses.has(run.status)) {
+    if (run && terminalRunStatuses.has(run.status) && !refreshedTerminalRunIds.current.has(run.id)) {
+      refreshedTerminalRunIds.current.add(run.id);
       requestRefresh();
     }
   }, [requestRefresh]);

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
 from deepagents import create_deep_agent
 
@@ -13,7 +14,7 @@ from backend.tools import PAPER_CLAW_TOOLS
 
 def create_paper_claw_agent(model: str | BaseChatModel | None = None):
     return create_deep_agent(
-        model=model,
+        model=model or FakeListChatModel(responses=["Paper Claw runtime model placeholder."]),
         tools=PAPER_CLAW_TOOLS,
         system_prompt=PAPER_CLAW_SYSTEM_PROMPT,
         middleware=[paper_claw_model_middleware],

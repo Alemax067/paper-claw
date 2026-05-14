@@ -26,6 +26,7 @@ class ResolvedProviderConfig(BaseModel):
     provider: str
     base_url: str | None = None
     model: str | None = None
+    api_key: str | None = None
     api_key_ref: str | None = None
     temperature: float | None = None
     settings: dict[str, Any] = Field(default_factory=dict)
