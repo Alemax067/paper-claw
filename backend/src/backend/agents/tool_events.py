@@ -9,8 +9,8 @@ from langgraph.types import Command
 
 from backend.agents.context import PaperClawContext
 from backend.db.repositories import AgentRunRepository
-from backend.db.session import SessionLocal
 from backend.db.types import EventLevel
+from backend.tools.context import tool_session
 
 
 def record_tool_event_call(
@@ -66,9 +66,8 @@ paper_claw_tool_event_middleware = wrap_tool_call(record_tool_event_call)
 
 
 def _append_tool_event(run_id: int, event_type: str, payload: dict[str, Any], level: str = EventLevel.info.value) -> None:
-    with SessionLocal() as session:
+    with tool_session() as session:
         AgentRunRepository(session).append_event(run_id, event_type, level=level, payload_json=payload)
-        session.commit()
 
 
 def _tool_name(request: ToolCallRequest) -> str | None:
