@@ -31,6 +31,7 @@ export function MessageTranscript({ messages, runs = [] }: MessageTranscriptProp
               <span>{message.source}</span>
               <span>{new Date(message.created_at).toLocaleString()}</span>
             </div>
+            {message.role === 'assistant' && run && <AgentActivity run={run} />}
             {message.content_text && <p>{message.content_text}</p>}
             {message.content_json && (
               <details>
@@ -38,7 +39,6 @@ export function MessageTranscript({ messages, runs = [] }: MessageTranscriptProp
                 <pre>{JSON.stringify(message.content_json, null, 2)}</pre>
               </details>
             )}
-            {message.role === 'assistant' && run && <AgentActivity run={run} />}
           </article>
         );
       })}

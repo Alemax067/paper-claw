@@ -34,7 +34,7 @@ def submit_agent_message(session: Session, request: AgentMessageRequest) -> Agen
     fallback_event: AgentStreamEvent | None = None
     for event in stream_agent_message(session, request):
         fallback_event = event
-        if event.type in {"run_completed", "run_failed"}:
+        if event.type in {"run_completed", "run_failed", "run_cancelled"}:
             final_event = event
     event = final_event or fallback_event
     if event is None:
@@ -82,6 +82,9 @@ def stream_agent_message(session: Session, request: AgentMessageRequest) -> Iter
             subgraphs=True,
             version="v2",
         ):
+            if _run_is_cancelled(session, prepared.run_id):
+                yield _run_cancelled_event(session, prepared)
+                return
             normalized = _normalize_stream_chunk(chunk)
             if normalized["mode"] not in STREAM_MODES:
                 continue
@@ -110,6 +113,13 @@ def stream_agent_message(session: Session, request: AgentMessageRequest) -> Iter
                 message=text,
                 payload=_stream_client_payload(normalized),
             )
+            if _run_is_cancelled(session, prepared.run_id):
+                yield _run_cancelled_event(session, prepared)
+                return
+
+        if _run_is_cancelled(session, prepared.run_id):
+            yield _run_cancelled_event(session, prepared)
+            return
 
         thread = session.get_one(Thread, prepared.thread_id)
         run = session.get_one(AgentRun, prepared.run_id)
@@ -208,6 +218,24 @@ def list_run_events(session: Session, run_id: int, after_sequence: int | None = 
         statement = statement.where(AgentRunEvent.sequence > after_sequence)
     events = session.scalars(statement.order_by(AgentRunEvent.sequence)).all()
     return [run_event_read(event) for event in events]
+
+
+def _run_is_cancelled(session: Session, run_id: int) -> bool:
+    session.expire_all()
+    run = session.get(AgentRun, run_id)
+    return run is not None and run.status == RunStatus.cancelled.value
+
+
+def _run_cancelled_event(session: Session, prepared: PreparedAgentRun) -> AgentStreamEvent:
+    session.expire_all()
+    run = session.get(AgentRun, prepared.run_id)
+    return AgentStreamEvent(
+        type="run_cancelled",
+        thread_id=prepared.thread_id,
+        run_id=prepared.run_id,
+        status=run.status if run is not None else RunStatus.cancelled.value,
+        payload={"status": RunStatus.cancelled.value},
+    )
 
 
 def cancel_run(session: Session, run_id: int) -> RunRead:

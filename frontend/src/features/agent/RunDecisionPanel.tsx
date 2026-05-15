@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { api } from '../../api/client';
 import type { ApprovalDecision, RunRead } from '../../api/types';
-import { EmptyState } from '../../components/EmptyState';
 import { ErrorBanner } from '../../components/ErrorBanner';
 import { StatusBadge } from '../../components/StatusBadge';
 
@@ -32,22 +31,6 @@ export function RunDecisionPanel({ run, onRefresh }: RunDecisionPanelProps) {
     }
   };
 
-  const cancel = async () => {
-    if (!run) {
-      return;
-    }
-    setSubmitting(true);
-    setError(null);
-    try {
-      await api.cancelRun(run.id);
-      onRefresh();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Cancel failed');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
   return (
     <section className="panel">
       <div className="panel-header">
@@ -56,7 +39,6 @@ export function RunDecisionPanel({ run, onRefresh }: RunDecisionPanelProps) {
       </div>
       <div className="panel-body stack">
         <ErrorBanner message={error} />
-        {!run && <EmptyState title="No run awaiting input" body="When the agent needs a decision, controls appear here." />}
         {run && (
           <>
             <div className="meta-row">
@@ -71,9 +53,8 @@ export function RunDecisionPanel({ run, onRefresh }: RunDecisionPanelProps) {
               <button className="secondary-button" disabled={submitting} onClick={() => submitDecision('approve')}>Approve</button>
               <button className="secondary-button" disabled={submitting} onClick={() => submitDecision('revise')}>Request revision</button>
               <button className="danger-button" disabled={submitting} onClick={() => submitDecision('reject')}>Reject</button>
-              <button className="danger-button" disabled={submitting} onClick={cancel}>Cancel run</button>
             </div>
-            <p className="meta-row">Approval and revision record decisions; continuation depends on backend runner support.</p>
+            <p className="meta-row">This run is waiting for user input. Decisions are recorded on the run.</p>
           </>
         )}
       </div>

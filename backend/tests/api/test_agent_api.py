@@ -19,6 +19,9 @@ class FakeAgent:
         self.calls.append((payload, context, config, stream_mode, subgraphs, version))
         if isinstance(self.chunks, Exception):
             raise self.chunks
+        if callable(self.chunks):
+            yield from self.chunks(context)
+            return
         yield from self.chunks
 
 
@@ -74,6 +77,32 @@ def test_post_agent_message_stream_returns_ndjson_events(client, session, monkey
     assert run.status == RunStatus.succeeded.value
     messages = session.query(Message).filter(Message.thread_id == payloads[-1]["thread_id"]).order_by(Message.created_at).all()
     assert [message.role for message in messages] == [MessageRole.user.value, MessageRole.assistant.value]
+
+
+def test_post_agent_message_stream_stops_persisting_after_cancel(client, session, monkeypatch):
+    def chunks(context):
+        yield message_chunk("partial answer")
+        run = session.get(AgentRun, context.run_id)
+        run.status = RunStatus.cancelled.value
+        AgentRunRepository(session).append_event(run.id, "agent_run_cancelled")
+        session.commit()
+        yield message_chunk(" should not persist")
+
+    monkeypatch.setattr("backend.agents.runner.create_paper_claw_agent", lambda: FakeAgent(chunks))
+
+    with client.stream("POST", "/api/agent/messages/stream", json={"message": "Cancel this", "model": "test-model"}) as response:
+        assert response.status_code == 200
+        events = [line for line in response.iter_lines() if line]
+
+    payloads = [json.loads(line) for line in events]
+    assert [payload["type"] for payload in payloads] == ["run_started", "agent_chunk", "run_cancelled"]
+    run = session.get(AgentRun, payloads[-1]["run_id"])
+    assert run.status == RunStatus.cancelled.value
+    messages = session.query(Message).filter(Message.thread_id == payloads[-1]["thread_id"]).order_by(Message.created_at).all()
+    assert [message.role for message in messages] == [MessageRole.user.value]
+    event_types = [event.event_type for event in run.events]
+    assert "agent_run_cancelled" in event_types
+    assert "agent_message_completed" not in event_types
 
 
 def test_post_agent_message_reuses_existing_thread(client, session, monkeypatch):

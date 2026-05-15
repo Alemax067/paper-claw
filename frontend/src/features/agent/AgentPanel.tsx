@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../api/client';
 import { getErrorMessage } from '../../api/errors';
-import type { AgentStreamEvent, RunRead } from '../../api/types';
+import type { AgentStreamEvent, RunEventRead, RunRead } from '../../api/types';
 import { ErrorBanner } from '../../components/ErrorBanner';
 import { LoadingBlock } from '../../components/LoadingBlock';
 import { StatusBadge } from '../../components/StatusBadge';
@@ -11,6 +11,7 @@ import { SearchSessionDecisionPanel } from '../search/SearchSessionDecisionPanel
 import { MessageComposer } from './MessageComposer';
 import { RunDecisionPanel } from './RunDecisionPanel';
 import { MessageTranscript } from './MessageTranscript';
+import { AgentActivity } from './AgentActivity';
 
 interface AgentPanelProps {
   selectedThreadId: number | null;
@@ -26,6 +27,7 @@ interface AgentPanelProps {
 }
 
 const terminalRunStatuses = new Set(['succeeded', 'failed', 'partial', 'cancelled']);
+const cancellableRunStatuses = new Set(['pending', 'running', 'waiting_for_user']);
 
 export function AgentPanel({
   selectedThreadId,
@@ -41,6 +43,7 @@ export function AgentPanel({
 }: AgentPanelProps) {
   const [streamingText, setStreamingText] = useState('');
   const [streamStatus, setStreamStatus] = useState<string | null>(null);
+  const [streamRun, setStreamRun] = useState<RunRead | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   const loader = useCallback(async () => {
@@ -74,10 +77,25 @@ export function AgentPanel({
     requestAnimationFrame(() => bottomRef.current?.scrollIntoView({ block: 'end' }));
   }, [selectedThreadId, thread?.messages.length, streamingText, activeRun?.events.length]);
 
+  const cancelRun = async () => {
+    if (!activeRunId || !activeRun || !cancellableRunStatuses.has(activeRun.status)) {
+      return;
+    }
+    onError(null);
+    try {
+      await api.cancelRun(activeRunId);
+      onRefresh();
+      void loadRun();
+    } catch (caught) {
+      onError(getErrorMessage(caught));
+    }
+  };
+
   const submitMessage = async (message: string) => {
     onError(null);
     setStreamingText('');
     setStreamStatus('Connecting to agent stream...');
+    setStreamRun(null);
     let selectedRunId: number | null = null;
     try {
       const response = await api.sendAgentMessageStream(
@@ -93,6 +111,7 @@ export function AgentPanel({
             onRunSelected(event.run_id);
             onRefresh();
           }
+          setStreamRun((current) => updateStreamRun(current, event));
           if (event.type === 'run_started') {
             setStreamStatus('Agent run started');
           } else if (event.type === 'agent_chunk') {
@@ -104,11 +123,18 @@ export function AgentPanel({
           } else if (event.type === 'run_completed') {
             setStreamStatus(null);
             setStreamingText('');
+            setStreamRun(null);
             reload();
             void loadRun();
           } else if (event.type === 'run_failed') {
             setStreamStatus(null);
             onError(event.error ?? 'Agent run failed');
+            reload();
+            void loadRun();
+          } else if (event.type === 'run_cancelled') {
+            setStreamStatus(null);
+            setStreamingText('');
+            setStreamRun(null);
             reload();
             void loadRun();
           }
@@ -125,7 +151,9 @@ export function AgentPanel({
 
   const threadRuns = activeRun ? mergeRuns(thread?.runs ?? [], activeRun) : thread?.runs ?? [];
   const searchSessionIds = activeRun ? activeSearchSessionIds(activeRun) : [];
-  const hasDecisionControls = Boolean(activeRun || searchSessionIds.length);
+  const showRunDecision = activeRun?.status === 'waiting_for_user';
+  const showCancelRun = Boolean(activeRunId && activeRun && cancellableRunStatuses.has(activeRun.status));
+  const hasDecisionControls = Boolean(showRunDecision || searchSessionIds.length);
 
   return (
     <section className="chat-main" aria-label="Chat workspace">
@@ -147,29 +175,65 @@ export function AgentPanel({
         <MessageTranscript messages={thread?.messages ?? []} runs={threadRuns} />
         {hasDecisionControls && (
           <div className="inline-decision-stack">
-            <RunDecisionPanel run={activeRun} onRefresh={onRefresh} />
+            {showRunDecision && <RunDecisionPanel run={activeRun} onRefresh={onRefresh} />}
             {searchSessionIds.map((searchSessionId) => (
               <SearchSessionDecisionPanel key={searchSessionId} searchSessionId={searchSessionId} onRefresh={onRefresh} />
             ))}
           </div>
         )}
-        {(streamStatus || streamingText) && (
+        {(streamStatus || streamingText || streamRun) && (
           <article className="message message-assistant message-streaming">
             <div className="meta-row">
               <span>assistant</span>
               <span>stream</span>
               {streamStatus && <span>{streamStatus}</span>}
             </div>
+            {streamRun && <AgentActivity run={streamRun} />}
             {streamingText ? <p>{streamingText}</p> : <p>Waiting for streamed output...</p>}
           </article>
         )}
         <div ref={bottomRef} />
       </div>
       <div className="chat-composer-dock">
-        <MessageComposer activePaperId={activePaperId} onSubmit={submitMessage} />
+        <MessageComposer activePaperId={activePaperId} canCancelRun={showCancelRun} onSubmit={submitMessage} onCancelRun={cancelRun} />
       </div>
     </section>
   );
+}
+
+function updateStreamRun(current: RunRead | null, event: AgentStreamEvent): RunRead {
+  const now = new Date().toISOString();
+  const base = current ?? {
+    id: event.run_id,
+    thread_id: event.thread_id,
+    workflow: 'paper_qa',
+    status: event.status ?? 'running',
+    error_message: event.error ?? null,
+    input_json: null,
+    output_json: null,
+    events: [],
+    created_at: now,
+    updated_at: now,
+  };
+  const run: RunRead = {
+    ...base,
+    status: event.status ?? base.status,
+    error_message: event.error ?? base.error_message,
+    updated_at: now,
+  };
+  if (!event.event_type || event.sequence == null || run.events.some((item) => item.sequence === event.sequence)) {
+    return run;
+  }
+  const runEvent: RunEventRead = {
+    id: event.sequence,
+    run_id: event.run_id,
+    sequence: event.sequence,
+    event_type: event.event_type,
+    level: event.error ? 'error' : 'info',
+    payload: event.payload,
+    created_at: now,
+  };
+  return { ...run, events: [...run.events, runEvent] };
 }
 
 function mergeRuns(runs: RunRead[], activeRun: RunRead): RunRead[] {

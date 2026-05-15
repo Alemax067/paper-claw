@@ -3,21 +3,30 @@ import { FormEvent, KeyboardEvent, useState } from 'react';
 interface MessageComposerProps {
   disabled?: boolean;
   activePaperId: number | null;
+  canCancelRun?: boolean;
   onSubmit: (message: string) => Promise<void>;
+  onCancelRun?: () => Promise<void> | void;
 }
 
-const promptChips = [
-  'Find the target paper and prepare a concise research brief.',
-  'Acquire the PDF or source if available, then explain the method.',
-  'Compare this paper against related retrieval and agent work.',
-];
-
-export function MessageComposer({ disabled = false, activePaperId, onSubmit }: MessageComposerProps) {
+export function MessageComposer({ disabled = false, activePaperId, canCancelRun = false, onSubmit, onCancelRun }: MessageComposerProps) {
   const [message, setMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
 
   const submit = async (event?: FormEvent) => {
     event?.preventDefault();
+    if (canCancelRun) {
+      if (!onCancelRun) {
+        return;
+      }
+      setCancelling(true);
+      try {
+        await onCancelRun();
+      } finally {
+        setCancelling(false);
+      }
+      return;
+    }
     const trimmed = message.trim();
     if (!trimmed) {
       return;
@@ -32,7 +41,7 @@ export function MessageComposer({ disabled = false, activePaperId, onSubmit }: M
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === 'Enter' && !event.shiftKey) {
+    if (event.key === 'Enter' && !event.shiftKey && !canCancelRun) {
       event.preventDefault();
       void submit();
     }
@@ -51,20 +60,14 @@ export function MessageComposer({ disabled = false, activePaperId, onSubmit }: M
             onChange={(event) => setMessage(event.target.value)}
             onKeyDown={onKeyDown}
             placeholder="Ask the agent to find, acquire, parse, compare, or review papers..."
-            disabled={disabled || submitting}
+            disabled={disabled || submitting || canCancelRun}
             rows={3}
           />
         </label>
         <div className="chat-composer__footer">
-          <div className="button-row">
-            {promptChips.map((chip) => (
-              <button className="chip-button" type="button" key={chip} onClick={() => setMessage(chip)} disabled={disabled || submitting}>
-                {chip}
-              </button>
-            ))}
-          </div>
-          <button className="primary-button" type="submit" disabled={disabled || submitting || !message.trim()}>
-            {submitting ? 'Streaming...' : 'Send'}
+          <span className="chat-composer__hint">Enter to send · Shift+Enter for newline</span>
+          <button className={canCancelRun ? 'danger-button' : 'primary-button'} type="submit" disabled={disabled || cancelling || (!canCancelRun && (submitting || !message.trim()))}>
+            {canCancelRun ? (cancelling ? 'Cancelling...' : 'Cancel run') : submitting ? 'Streaming...' : 'Send'}
           </button>
         </div>
       </div>
