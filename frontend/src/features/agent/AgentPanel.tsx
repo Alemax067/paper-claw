@@ -1,6 +1,7 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api } from '../../api/client';
 import { getErrorMessage } from '../../api/errors';
+import type { AgentStreamEvent } from '../../api/types';
 import { ErrorBanner } from '../../components/ErrorBanner';
 import { LoadingBlock } from '../../components/LoadingBlock';
 import { useAsyncResource } from '../../hooks/useAsyncResource';
@@ -18,6 +19,8 @@ interface AgentPanelProps {
 }
 
 export function AgentPanel({ selectedThreadId, activePaperId, refreshToken, onThreadSelected, onRunSelected, onRefresh, onError }: AgentPanelProps) {
+  const [streamingText, setStreamingText] = useState('');
+  const [streamStatus, setStreamStatus] = useState<string | null>(null);
   const loader = useCallback(async () => {
     if (selectedThreadId == null) {
       return null;
@@ -32,19 +35,47 @@ export function AgentPanel({ selectedThreadId, activePaperId, refreshToken, onTh
 
   const submitMessage = async (message: string) => {
     onError(null);
+    setStreamingText('');
+    setStreamStatus('Connecting to agent stream...');
+    let selectedRunId: number | null = null;
     try {
-      const response = await api.sendAgentMessage({
-        thread_id: selectedThreadId,
-        active_paper_id: activePaperId,
-        message,
-      });
-      onThreadSelected(response.thread_id);
-      onRunSelected(response.run_id);
-      onRefresh();
+      const response = await api.sendAgentMessageStream(
+        {
+          thread_id: selectedThreadId,
+          active_paper_id: activePaperId,
+          message,
+        },
+        (event: AgentStreamEvent) => {
+          if (selectedRunId !== event.run_id) {
+            selectedRunId = event.run_id;
+            onThreadSelected(event.thread_id);
+            onRunSelected(event.run_id);
+            onRefresh();
+          }
+          if (event.type === 'run_started') {
+            setStreamStatus('Agent run started');
+          } else if (event.type === 'agent_chunk') {
+            const mode = typeof event.payload.mode === 'string' ? event.payload.mode : 'chunk';
+            setStreamStatus(`Streaming ${mode}`);
+            if (mode === 'messages' && event.message) {
+              setStreamingText((current) => current + event.message);
+            }
+          } else if (event.type === 'run_completed') {
+            setStreamStatus(null);
+            setStreamingText('');
+            reload();
+          } else if (event.type === 'run_failed') {
+            setStreamStatus(null);
+            onError(event.error ?? 'Agent run failed');
+            reload();
+          }
+        },
+      );
       if (response.error) {
         onError(response.error);
       }
     } catch (caught) {
+      setStreamStatus(null);
       onError(getErrorMessage(caught));
     }
   };
@@ -59,6 +90,16 @@ export function AgentPanel({ selectedThreadId, activePaperId, refreshToken, onTh
         <ErrorBanner message={error} />
         {loading && selectedThreadId && <LoadingBlock label="Loading transcript" />}
         <MessageTranscript messages={thread?.messages ?? []} />
+        {(streamStatus || streamingText) && (
+          <article className="message message-assistant">
+            <div className="meta-row">
+              <span>assistant</span>
+              <span>stream</span>
+              {streamStatus && <span>{streamStatus}</span>}
+            </div>
+            {streamingText ? <p>{streamingText}</p> : <p>Waiting for streamed output...</p>}
+          </article>
+        )}
         <MessageComposer activePaperId={activePaperId} onSubmit={submitMessage} />
       </div>
     </section>

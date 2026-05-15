@@ -2,6 +2,7 @@ import { toApiError } from './errors';
 import type {
   AgentMessageRequest,
   AgentMessageResponse,
+  AgentStreamEvent,
   ApprovalRequest,
   ArtifactRead,
   ConfirmSearchCandidateRequest,
@@ -34,6 +35,42 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function streamNdjson<T>(response: Response, onEvent: (event: T) => void): Promise<T | null> {
+  if (!response.body) {
+    return null;
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let lastEvent: T | null = null;
+
+  const parseLine = (line: string) => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      return;
+    }
+    const event = JSON.parse(trimmed) as T;
+    lastEvent = event;
+    onEvent(event);
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) {
+      break;
+    }
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+    for (const line of lines) {
+      parseLine(line);
+    }
+  }
+  buffer += decoder.decode();
+  parseLine(buffer);
+  return lastEvent;
+}
+
 export const api = {
   health: () => requestJson<{ status: string }>('/api/health'),
 
@@ -50,6 +87,33 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(request),
     }),
+  sendAgentMessageStream: async (
+    request: AgentMessageRequest,
+    onEvent: (event: AgentStreamEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<AgentMessageResponse> => {
+    const response = await fetch(`${API_BASE_URL}/api/agent/messages/stream`, {
+      method: 'POST',
+      body: JSON.stringify(request),
+      signal,
+      headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
+    });
+    if (!response.ok) {
+      throw await toApiError(response);
+    }
+    const finalEvent = await streamNdjson<AgentStreamEvent>(response, onEvent);
+    if (!finalEvent) {
+      throw new Error('Agent stream ended without events');
+    }
+    return {
+      thread_id: finalEvent.thread_id,
+      run_id: finalEvent.run_id,
+      assistant_message_id: finalEvent.assistant_message_id ?? null,
+      status: finalEvent.status ?? 'failed',
+      message: finalEvent.message ?? null,
+      error: finalEvent.error ?? null,
+    };
+  },
   cancelRun: (runId: number) => requestJson<RunRead>(`/api/agent/runs/${runId}/cancel`, { method: 'POST' }),
   submitRunApproval: (runId: number, request: ApprovalRequest) =>
     requestJson<RunRead>(`/api/agent/runs/${runId}/approval`, {

@@ -14,6 +14,7 @@ coverage.xml
 dist/
 build/
 logs/
+dev_plans/
 
 # Reference directories kept outside the new repo history.
 deepagents/

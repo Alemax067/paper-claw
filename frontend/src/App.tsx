@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { api } from './api/client';
 import { AppShell } from './components/AppShell';
 import { ErrorBanner } from './components/ErrorBanner';
@@ -13,8 +13,6 @@ import { SearchSessionDecisionPanel } from './features/search/SearchSessionDecis
 import { ThreadList } from './features/threads/ThreadList';
 import type { RunRead } from './api/types';
 
-const terminalRunStatuses = new Set(['succeeded', 'failed', 'partial', 'cancelled']);
-
 export function App() {
   const [selectedThreadId, setSelectedThreadId] = useState<number | null>(null);
   const [selectedPaperId, setSelectedPaperId] = useState<number | null>(null);
@@ -24,16 +22,11 @@ export function App() {
   const [activeRun, setActiveRun] = useState<RunRead | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
   const [globalError, setGlobalError] = useState<string | null>(null);
-  const refreshedTerminalRunIds = useRef(new Set<number>());
 
   const requestRefresh = useCallback(() => setRefreshToken((value) => value + 1), []);
   const onRunUpdated = useCallback((run: RunRead | null) => {
     setActiveRun(run);
-    if (run && terminalRunStatuses.has(run.status) && !refreshedTerminalRunIds.current.has(run.id)) {
-      refreshedTerminalRunIds.current.add(run.id);
-      requestRefresh();
-    }
-  }, [requestRefresh]);
+  }, []);
 
   const searchSessionIds = useMemo(() => {
     const ids = new Set<number>();

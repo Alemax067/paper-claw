@@ -29,6 +29,19 @@ export interface AgentMessageResponse {
   error: string | null;
 }
 
+export interface AgentStreamEvent {
+  type: string;
+  thread_id: number;
+  run_id: number;
+  sequence?: number | null;
+  event_type?: string | null;
+  status?: RunStatus | string | null;
+  message?: string | null;
+  assistant_message_id?: number | null;
+  error?: string | null;
+  payload: Record<string, unknown>;
+}
+
 export interface MessageRead {
   id: number;
   thread_id: number;

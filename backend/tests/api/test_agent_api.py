@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from langchain_core.messages import AIMessage
 
 from backend.db.models import AgentRun, Message, Thread
@@ -9,19 +11,23 @@ from backend.settings import clear_settings_cache
 
 
 class FakeAgent:
-    def __init__(self, output):
-        self.output = output
+    def __init__(self, chunks):
+        self.chunks = chunks
         self.calls = []
 
-    def invoke(self, payload, *, context, config=None):
-        self.calls.append((payload, context, config))
-        if isinstance(self.output, Exception):
-            raise self.output
-        return self.output
+    def stream(self, payload, *, context, config=None, stream_mode=None, subgraphs=None, version=None):
+        self.calls.append((payload, context, config, stream_mode, subgraphs, version))
+        if isinstance(self.chunks, Exception):
+            raise self.chunks
+        yield from self.chunks
+
+
+def message_chunk(content: str):
+    return {"type": "messages", "ns": (), "data": (AIMessage(content=content), {"langgraph_node": "model"})}
 
 
 def test_post_agent_message_creates_thread_messages_run_and_events(client, session, monkeypatch):
-    fake_agent = FakeAgent({"messages": [AIMessage(content="assistant answer")]})
+    fake_agent = FakeAgent([message_chunk("assistant answer")])
     monkeypatch.setattr("backend.agents.runner.create_paper_claw_agent", lambda: fake_agent)
 
     response = client.post("/api/agent/messages", json={"message": "Explain this paper", "model": "test-model", "api_key": "secret"})
@@ -41,6 +47,9 @@ def test_post_agent_message_creates_thread_messages_run_and_events(client, sessi
     assert run.deepagent_thread_id == thread.deepagent_thread_id
     assert fake_agent.calls[0][2]["configurable"]["thread_id"] == thread.deepagent_thread_id
     assert fake_agent.calls[0][2]["metadata"]["paper_claw_run_id"] == run.id
+    assert fake_agent.calls[0][3] == ["messages", "updates"]
+    assert fake_agent.calls[0][4] is True
+    assert fake_agent.calls[0][5] == "v2"
     assert run.status == RunStatus.succeeded.value
     assert run.input_json["has_api_key"] is True
     assert "api_key" not in run.input_json
@@ -50,11 +59,28 @@ def test_post_agent_message_creates_thread_messages_run_and_events(client, sessi
     assert [event.event_type for event in run.events] == ["agent_message_received", "agent_message_completed"]
 
 
+def test_post_agent_message_stream_returns_ndjson_events(client, session, monkeypatch):
+    fake_agent = FakeAgent([message_chunk("streamed answer")])
+    monkeypatch.setattr("backend.agents.runner.create_paper_claw_agent", lambda: fake_agent)
+
+    with client.stream("POST", "/api/agent/messages/stream", json={"message": "Stream this", "model": "test-model"}) as response:
+        assert response.status_code == 200
+        events = [line for line in response.iter_lines() if line]
+
+    payloads = [json.loads(line) for line in events]
+    assert [payload["type"] for payload in payloads] == ["run_started", "agent_chunk", "run_completed"]
+    assert payloads[-1]["message"] == "streamed answer"
+    run = session.get(AgentRun, payloads[-1]["run_id"])
+    assert run.status == RunStatus.succeeded.value
+    messages = session.query(Message).filter(Message.thread_id == payloads[-1]["thread_id"]).order_by(Message.created_at).all()
+    assert [message.role for message in messages] == [MessageRole.user.value, MessageRole.assistant.value]
+
+
 def test_post_agent_message_reuses_existing_thread(client, session, monkeypatch):
     thread = Thread(title="Existing thread")
     session.add(thread)
     session.commit()
-    monkeypatch.setattr("backend.agents.runner.create_paper_claw_agent", lambda: FakeAgent({"messages": [AIMessage(content="ok")]}))
+    monkeypatch.setattr("backend.agents.runner.create_paper_claw_agent", lambda: FakeAgent([message_chunk("ok")]))
 
     response = client.post("/api/agent/messages", json={"thread_id": thread.id, "message": "Continue", "model": "test-model"})
 
@@ -72,7 +98,7 @@ def test_post_agent_message_uses_settings_chat_provider(client, monkeypatch):
     monkeypatch.setenv("PAPER_CLAW_CHAT_TIMEOUT_SECONDS", "33")
     monkeypatch.setenv("PAPER_CLAW_CHAT_MAX_RETRIES", "3")
     clear_settings_cache()
-    fake_agent = FakeAgent({"messages": [AIMessage(content="ok")]})
+    fake_agent = FakeAgent([message_chunk("ok")])
     monkeypatch.setattr("backend.agents.runner.create_paper_claw_agent", lambda: fake_agent)
 
     try:
@@ -93,7 +119,7 @@ def test_post_agent_message_uses_settings_chat_provider(client, monkeypatch):
 def test_post_agent_message_reports_missing_chat_model(client, monkeypatch):
     monkeypatch.setenv("PAPER_CLAW_CHAT_MODEL", " ")
     clear_settings_cache()
-    monkeypatch.setattr("backend.agents.runner.create_paper_claw_agent", lambda: FakeAgent({"messages": [AIMessage(content="ok")]}))
+    monkeypatch.setattr("backend.agents.runner.create_paper_claw_agent", lambda: FakeAgent([message_chunk("ok")]))
 
     try:
         response = client.post("/api/agent/messages", json={"message": "Use settings"})

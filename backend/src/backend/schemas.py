@@ -106,6 +106,19 @@ class AgentMessageResponse(BaseModel):
     error: str | None = None
 
 
+class AgentStreamEvent(BaseModel):
+    type: str
+    thread_id: int
+    run_id: int
+    sequence: int | None = None
+    event_type: str | None = None
+    status: str | None = None
+    message: str | None = None
+    assistant_message_id: int | None = None
+    error: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
 class MessageRead(BaseModel):
     id: int
     thread_id: int
