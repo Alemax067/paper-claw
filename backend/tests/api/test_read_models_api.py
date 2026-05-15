@@ -1,15 +1,19 @@
 from __future__ import annotations
 
-from backend.db.models import Artifact, Paper, Report, ReportEvidence
-from backend.db.repositories import ParsingRepository, ThreadRepository
-from backend.db.types import ArtifactKind, EvidenceType, PaperArtifactRole, ReportType
+from backend.db.models import Artifact, Memory, Paper, Report, ReportEvidence
+from backend.db.repositories import AgentRunRepository, ParsingRepository, ThreadRepository
+from backend.db.types import ArtifactKind, EvidenceType, PaperArtifactRole, ReportType, ThreadStatus, WorkflowName
 from backend.services.storage import ArtifactStorageService
 from backend.integrations.storage import LocalStorage
 
 
 def test_threads_read_model(client, session):
-    thread = ThreadRepository(session).create("API thread")
-    ThreadRepository(session).add_message(thread.id, "user", "hello")
+    threads = ThreadRepository(session)
+    runs = AgentRunRepository(session)
+    thread = threads.create("API thread")
+    run = runs.create(WorkflowName.paper_qa.value, thread_id=thread.id)
+    event = runs.append_event(run.id, "agent_message_received")
+    threads.add_message(thread.id, "user", "hello", run_id=run.id)
     session.commit()
 
     list_response = client.get("/api/threads")
@@ -18,7 +22,61 @@ def test_threads_read_model(client, session):
     assert list_response.status_code == 200
     assert list_response.json()[0]["title"] == "API thread"
     assert detail_response.status_code == 200
-    assert detail_response.json()["messages"][0]["content_text"] == "hello"
+    payload = detail_response.json()
+    assert payload["messages"][0]["content_text"] == "hello"
+    assert payload["runs"][0]["events"][0]["id"] == event.id
+
+
+def test_archive_thread_hides_it_from_default_list(client, session):
+    thread = ThreadRepository(session).create("Archived thread")
+    session.commit()
+
+    archive_response = client.post(f"/api/threads/{thread.id}/archive")
+    list_response = client.get("/api/threads")
+    archived_list_response = client.get("/api/threads", params={"include_archived": True})
+
+    assert archive_response.status_code == 200
+    assert archive_response.json()["status"] == ThreadStatus.archived.value
+    assert list_response.status_code == 200
+    assert [item["id"] for item in list_response.json()] == []
+    assert archived_list_response.status_code == 200
+    assert archived_list_response.json()[0]["id"] == thread.id
+
+
+def test_archive_missing_thread_returns_404(client):
+    response = client.post("/api/threads/999/archive")
+
+    assert response.status_code == 404
+
+
+def test_memories_read_model(client, session):
+    memory = Memory(path="/memories/user/preferences.md", title="Preferences", content_text="Use Chinese.")
+    session.add(memory)
+    session.commit()
+
+    response = client.get("/api/memories")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload[0]["path"] == memory.path
+    assert payload[0]["content_text"] == "Use Chinese."
+
+
+def test_runtime_settings_read_model_redacts_secrets(client, monkeypatch):
+    monkeypatch.setenv("PAPER_CLAW_CHAT_API_KEY", "secret-value")
+    monkeypatch.setenv("PAPER_CLAW_CHAT_MODEL", "openai:gpt-test")
+    from backend.settings import clear_settings_cache
+
+    clear_settings_cache()
+    try:
+        response = client.get("/api/settings/runtime")
+    finally:
+        clear_settings_cache()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["chat"]["api_key_configured"] is True
+    assert "secret-value" not in str(payload)
 
 
 def test_paper_detail_includes_aggregate_state(client, session, tmp_path):

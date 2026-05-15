@@ -12,7 +12,7 @@ from backend.db.repositories import (
     ThreadRepository,
 )
 from backend.db.seed import seed_minimal_database
-from backend.db.types import ArtifactKind, EvidenceType, IdentifierType, PaperArtifactRole, PaperSource, WorkflowName
+from backend.db.types import ArtifactKind, EvidenceType, IdentifierType, PaperArtifactRole, PaperSource, ThreadStatus, WorkflowName
 
 
 def test_repositories_basic_flow(session):
@@ -52,6 +52,18 @@ def test_repositories_basic_flow(session):
     assert run.events[0].sequence == 1
     assert search.selected_candidate_id == candidate.id
     assert report.evidence[0].chunk_id == chunk.id
+
+
+def test_thread_repository_archive_hides_default_list(session):
+    threads = ThreadRepository(session)
+    active = threads.create("Active thread")
+    archived = threads.create("Archived thread")
+    threads.archive(archived.id)
+    session.commit()
+
+    assert [thread.id for thread in threads.list()] == [active.id]
+    assert {thread.id for thread in threads.list(include_archived=True)} == {active.id, archived.id}
+    assert archived.status == ThreadStatus.archived.value
 
 
 def test_seed_minimal_database(session):

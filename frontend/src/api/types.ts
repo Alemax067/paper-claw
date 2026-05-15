@@ -2,6 +2,7 @@ export type JsonValue = string | number | boolean | null | JsonValue[] | { [key:
 export type JsonObject = Record<string, JsonValue>;
 
 export type RunStatus = 'pending' | 'waiting_for_user' | 'running' | 'succeeded' | 'partial' | 'failed' | 'cancelled';
+export type ThreadStatus = 'active' | 'archived';
 export type ApprovalDecision = 'approve' | 'reject' | 'revise' | 'cancel';
 export type ArtifactUploadRole = 'pdf' | 'source';
 
@@ -80,7 +81,7 @@ export interface ThreadSummary {
   id: number;
   title: string;
   surface: string;
-  status: string;
+  status: ThreadStatus | string;
   current_focus_paper_id: number | null;
   created_at: string;
   updated_at: string;
@@ -89,6 +90,38 @@ export interface ThreadSummary {
 export interface ThreadDetail extends ThreadSummary {
   messages: MessageRead[];
   runs: RunRead[];
+}
+
+export interface MemoryRead {
+  id: number;
+  path: string;
+  title: string | null;
+  memory_type: string;
+  scope_type: string;
+  scope_id: string | null;
+  paper_id: number | null;
+  content_text: string;
+  content_json: JsonObject | null;
+  source: string;
+  status: string;
+  source_thread_id: number | null;
+  source_paper_id: number | null;
+  last_accessed_at: string | null;
+  metadata: JsonObject;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RuntimeSettingsRead {
+  environment: string;
+  data_dir: string;
+  storage_root: string | null;
+  database_configured: boolean;
+  chat: JsonObject;
+  embedding: JsonObject;
+  arxiv: JsonObject;
+  openalex: JsonObject;
+  parsing: JsonObject;
 }
 
 export interface ArtifactRead {

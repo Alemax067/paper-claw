@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from backend.db.models import AgentRun, AgentRunEvent, Artifact, Message, Paper, Report, SearchCandidate, SearchSession, Thread
+from backend.db.models import AgentRun, AgentRunEvent, Artifact, Memory, Message, Paper, Report, SearchCandidate, SearchSession, Thread
 from backend.schemas import (
     ArtifactRead,
+    MemoryRead,
     MessageRead,
     PaperDetail,
     PaperSummary,
@@ -75,7 +76,29 @@ def thread_detail(thread: Thread) -> ThreadDetail:
     return ThreadDetail(
         **summary.model_dump(),
         messages=[message_read(message) for message in sorted(thread.messages, key=lambda item: item.created_at)],
-        runs=[run_read(run, include_events=False) for run in sorted(thread.agent_runs, key=lambda item: item.created_at, reverse=True)],
+        runs=[run_read(run, include_events=True) for run in sorted(thread.agent_runs, key=lambda item: item.created_at, reverse=True)],
+    )
+
+
+def memory_read(memory: Memory) -> MemoryRead:
+    return MemoryRead(
+        id=memory.id,
+        path=memory.path,
+        title=memory.title,
+        memory_type=memory.memory_type,
+        scope_type=memory.scope_type,
+        scope_id=memory.scope_id,
+        paper_id=memory.paper_id,
+        content_text=memory.content_text,
+        content_json=memory.content_json,
+        source=memory.source,
+        status=memory.status,
+        source_thread_id=memory.source_thread_id,
+        source_paper_id=memory.source_paper_id,
+        last_accessed_at=memory.last_accessed_at,
+        metadata=memory.metadata_json or {},
+        created_at=memory.created_at,
+        updated_at=memory.updated_at,
     )
 
 

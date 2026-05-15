@@ -13,6 +13,8 @@ import type {
   ReportSummary,
   RunEventRead,
   RunRead,
+  RuntimeSettingsRead,
+  MemoryRead,
   SearchSessionRead,
   ThreadDetail,
   ThreadSummary,
@@ -76,6 +78,9 @@ export const api = {
 
   listThreads: () => requestJson<ThreadSummary[]>('/api/threads'),
   getThread: (threadId: number) => requestJson<ThreadDetail>(`/api/threads/${threadId}`),
+  archiveThread: (threadId: number) => requestJson<ThreadSummary>(`/api/threads/${threadId}/archive`, { method: 'POST' }),
+  listMemories: () => requestJson<MemoryRead[]>('/api/memories'),
+  getRuntimeSettings: () => requestJson<RuntimeSettingsRead>('/api/settings/runtime'),
 
   getRun: (runId: number) => requestJson<RunRead>(`/api/runs/${runId}`),
   listRunEvents: (runId: number, afterSequence?: number) => {

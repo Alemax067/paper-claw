@@ -1,19 +1,18 @@
 import { useCallback, useMemo, useState } from 'react';
 import { api } from './api/client';
-import { AppShell } from './components/AppShell';
-import { ErrorBanner } from './components/ErrorBanner';
+import { AppShell, type AppPage, type NavMode } from './components/AppShell';
 import { PaperArchive } from './features/papers/PaperArchive';
 import { PaperDetail } from './features/papers/PaperDetail';
 import { ReportIndex } from './features/reports/ReportIndex';
 import { ReportReader } from './features/reports/ReportReader';
-import { AgentPanel } from './features/agent/AgentPanel';
-import { RunTimeline } from './features/agent/RunTimeline';
-import { RunDecisionPanel } from './features/agent/RunDecisionPanel';
-import { SearchSessionDecisionPanel } from './features/search/SearchSessionDecisionPanel';
-import { ThreadList } from './features/threads/ThreadList';
+import { ChatPage } from './features/chat/ChatPage';
+import { MemoryPage } from './features/memory/MemoryPage';
+import { SettingPage } from './features/settings/SettingPage';
 import type { RunRead } from './api/types';
 
 export function App() {
+  const [activePage, setActivePage] = useState<AppPage>('chat');
+  const [navMode, setNavMode] = useState<NavMode>('title');
   const [selectedThreadId, setSelectedThreadId] = useState<number | null>(null);
   const [selectedPaperId, setSelectedPaperId] = useState<number | null>(null);
   const [selectedReportId, setSelectedReportId] = useState<number | null>(null);
@@ -42,79 +41,105 @@ export function App() {
   const activeRunLabel = activeRunId ? `run #${activeRunId}${activeRun ? ` · ${activeRun.status}` : ''}` : undefined;
   const activePaperLabel = activePaperId ? `paper #${activePaperId} pinned` : undefined;
 
-  return (
-    <AppShell
-      activeRunLabel={activeRunLabel}
-      activePaperLabel={activePaperLabel}
-      left={
-        <>
-          <ThreadList
-            selectedThreadId={selectedThreadId}
-            refreshToken={refreshToken}
-            onSelectThread={setSelectedThreadId}
-          />
-          <PaperArchive
-            selectedPaperId={selectedPaperId}
-            activePaperId={activePaperId}
-            refreshToken={refreshToken}
-            onSelectPaper={setSelectedPaperId}
-            onSetActivePaper={setActivePaperId}
-          />
-          <ReportIndex
-            selectedReportId={selectedReportId}
-            refreshToken={refreshToken}
-            onSelectReport={setSelectedReportId}
-          />
-        </>
-      }
-      center={
-        <>
-          <ErrorBanner message={globalError} />
-          <AgentPanel
-            selectedThreadId={selectedThreadId}
-            activePaperId={activePaperId}
-            refreshToken={refreshToken}
-            onThreadSelected={setSelectedThreadId}
-            onRunSelected={setActiveRunId}
-            onRefresh={requestRefresh}
-            onError={setGlobalError}
-          />
-          <RunTimeline
-            runId={activeRunId}
-            refreshToken={refreshToken}
-            onRunLoaded={onRunUpdated}
-          />
-        </>
-      }
-      right={
-        <>
-          <RunDecisionPanel run={activeRun} onRefresh={requestRefresh} />
-          {searchSessionIds.map((searchSessionId) => (
-            <SearchSessionDecisionPanel
-              key={searchSessionId}
-              searchSessionId={searchSessionId}
+  const page = (() => {
+    if (activePage === 'chat') {
+      return (
+        <ChatPage
+          selectedThreadId={selectedThreadId}
+          activePaperId={activePaperId}
+          activeRunId={activeRunId}
+          activeRun={activeRun}
+          refreshToken={refreshToken}
+          globalError={globalError}
+          onThreadSelected={setSelectedThreadId}
+          onRunSelected={setActiveRunId}
+          onRunUpdated={onRunUpdated}
+          onRefresh={requestRefresh}
+          onError={setGlobalError}
+        />
+      );
+    }
+
+    if (activePage === 'paper') {
+      return (
+        <div className="split-page paper-page">
+          <aside className="section-sidebar">
+            <PaperArchive
+              selectedPaperId={selectedPaperId}
+              activePaperId={activePaperId}
+              refreshToken={refreshToken}
+              onSelectPaper={setSelectedPaperId}
+              onSetActivePaper={setActivePaperId}
+            />
+          </aside>
+          <main className="workspace-main">
+            <PaperDetail
+              paperId={selectedPaperId}
+              activeRunId={activeRunId}
+              activePaperId={activePaperId}
+              refreshToken={refreshToken}
+              onSetActivePaper={setActivePaperId}
+              onSelectReport={(reportId) => {
+                setSelectedReportId(reportId);
+                setActivePage('report');
+              }}
               onRefresh={requestRefresh}
             />
-          ))}
-          <PaperDetail
-            paperId={selectedPaperId}
-            activeRunId={activeRunId}
-            activePaperId={activePaperId}
-            refreshToken={refreshToken}
-            onSetActivePaper={setActivePaperId}
-            onSelectReport={setSelectedReportId}
-            onRefresh={requestRefresh}
-          />
-          <ReportReader
-            reportId={selectedReportId}
-            onSelectPaper={(paperId) => {
-              setSelectedPaperId(paperId);
-              setActivePaperId(paperId);
-            }}
-          />
-        </>
-      }
-    />
+          </main>
+        </div>
+      );
+    }
+
+    if (activePage === 'report') {
+      return (
+        <div className="split-page report-page">
+          <aside className="section-sidebar">
+            <ReportIndex selectedReportId={selectedReportId} refreshToken={refreshToken} onSelectReport={setSelectedReportId} />
+          </aside>
+          <main className="workspace-main">
+            <ReportReader
+              reportId={selectedReportId}
+              onSelectPaper={(paperId) => {
+                setSelectedPaperId(paperId);
+                setActivePaperId(paperId);
+                setActivePage('paper');
+              }}
+            />
+          </main>
+        </div>
+      );
+    }
+
+    if (activePage === 'memory') {
+      return <MemoryPage refreshToken={refreshToken} />;
+    }
+
+    if (activePage === 'task') {
+      return (
+        <main className="empty-workspace task-page">
+          <div className="empty-state">
+            <p className="eyebrow">Task</p>
+            <h3>Task workspace</h3>
+            <p>This page is intentionally empty while task semantics are still being designed.</p>
+          </div>
+        </main>
+      );
+    }
+
+    return <SettingPage />;
+  })();
+
+  return (
+    <AppShell
+      activePage={activePage}
+      navMode={navMode}
+      activeRunLabel={activeRunLabel}
+      activePaperLabel={activePaperLabel}
+      onSelectPage={setActivePage}
+      onToggleNavMode={() => setNavMode((value) => (value === 'title' ? 'icon' : 'title'))}
+    >
+      {page}
+    </AppShell>
   );
 }
 

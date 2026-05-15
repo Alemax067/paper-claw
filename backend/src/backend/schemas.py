@@ -168,6 +168,38 @@ class ThreadDetail(ThreadSummary):
     runs: list[RunRead] = Field(default_factory=list)
 
 
+class MemoryRead(BaseModel):
+    id: int
+    path: str
+    title: str | None = None
+    memory_type: str
+    scope_type: str
+    scope_id: str | None = None
+    paper_id: int | None = None
+    content_text: str
+    content_json: dict[str, Any] | None = None
+    source: str
+    status: str
+    source_thread_id: int | None = None
+    source_paper_id: int | None = None
+    last_accessed_at: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+
+
+class RuntimeSettingsRead(BaseModel):
+    environment: str
+    data_dir: str
+    storage_root: str | None = None
+    database_configured: bool
+    chat: dict[str, Any] = Field(default_factory=dict)
+    embedding: dict[str, Any] = Field(default_factory=dict)
+    arxiv: dict[str, Any] = Field(default_factory=dict)
+    openalex: dict[str, Any] = Field(default_factory=dict)
+    parsing: dict[str, Any] = Field(default_factory=dict)
+
+
 class ArtifactRead(BaseModel):
     id: int
     kind: str

@@ -1,4 +1,4 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, KeyboardEvent, useState } from 'react';
 
 interface MessageComposerProps {
   disabled?: boolean;
@@ -31,28 +31,42 @@ export function MessageComposer({ disabled = false, activePaperId, onSubmit }: M
     }
   };
 
+  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      void submit();
+    }
+  };
+
   return (
-    <form className="composer form-grid" onSubmit={submit}>
-      <label>
-        Command message {activePaperId && <span>· active paper #{activePaperId}</span>}
-        <textarea
-          value={message}
-          onChange={(event) => setMessage(event.target.value)}
-          placeholder="Ask the agent to find, acquire, parse, compare, or review papers..."
-          disabled={disabled || submitting}
-        />
-      </label>
-      <div className="button-row">
-        {promptChips.map((chip) => (
-          <button className="chip-button" type="button" key={chip} onClick={() => setMessage(chip)}>
-            {chip}
+    <form className="composer chat-composer" onSubmit={submit}>
+      <div className="chat-composer__box">
+        <label>
+          <span className="chat-composer__label">
+            Ask Paper Claw
+            {activePaperId && <span className="active-context-chip">paper #{activePaperId}</span>}
+          </span>
+          <textarea
+            value={message}
+            onChange={(event) => setMessage(event.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder="Ask the agent to find, acquire, parse, compare, or review papers..."
+            disabled={disabled || submitting}
+            rows={3}
+          />
+        </label>
+        <div className="chat-composer__footer">
+          <div className="button-row">
+            {promptChips.map((chip) => (
+              <button className="chip-button" type="button" key={chip} onClick={() => setMessage(chip)} disabled={disabled || submitting}>
+                {chip}
+              </button>
+            ))}
+          </div>
+          <button className="primary-button" type="submit" disabled={disabled || submitting || !message.trim()}>
+            {submitting ? 'Streaming...' : 'Send'}
           </button>
-        ))}
-      </div>
-      <div className="button-row">
-        <button className="primary-button" type="submit" disabled={disabled || submitting || !message.trim()}>
-          {submitting ? 'Dispatching...' : 'Dispatch agent'}
-        </button>
+        </div>
       </div>
     </form>
   );
