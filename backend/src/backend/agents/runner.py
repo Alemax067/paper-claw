@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from backend.agents.context import PaperClawContext
 from backend.agents.main_agent import create_paper_claw_agent
 from backend.api.serializers import run_event_read, run_read
-from backend.db.models import AgentRun, AgentRunEvent, Thread
+from backend.db.models import AgentRun, AgentRunEvent, Paper, Thread
 from backend.db.repositories import AgentRunRepository, ThreadRepository
 from backend.db.types import EventLevel, MessageRole, MessageSource, RunStatus, WorkflowName
 from backend.schemas import AgentMessageRequest, AgentMessageResponse, AgentStreamEvent, RunEventRead, RunRead
@@ -27,6 +27,8 @@ class PreparedAgentRun:
     thread_id: int
     run_id: int
     deepagent_thread_id: str
+    active_paper_id: int | None
+    active_paper_system_info: str | None
 
 
 def submit_agent_message(session: Session, request: AgentMessageRequest) -> AgentMessageResponse:
@@ -66,7 +68,7 @@ def stream_agent_message(session: Session, request: AgentMessageRequest) -> Iter
 
     try:
         agent = create_paper_claw_agent()
-        context = _agent_context(prepared.thread_id, prepared.run_id, request, session)
+        context = _agent_context(prepared, request)
         for chunk in agent.stream(
             {"messages": [{"role": "user", "content": request.message}]},
             config={
@@ -196,6 +198,8 @@ def prepare_agent_message_run(session: Session, request: AgentMessageRequest) ->
         thread = threads.create(_thread_title(request.message), deepagent_thread_id=_new_deepagent_thread_id())
     elif thread.deepagent_thread_id is None:
         thread.deepagent_thread_id = _new_deepagent_thread_id()
+    active_paper_id = _resolve_active_paper_id(session, thread, request)
+    active_paper_system_info = _active_paper_system_info(session, active_paper_id)
     threads.add_message(thread.id, MessageRole.user.value, request.message, source=MessageSource.human.value)
     run = runs.create(
         WorkflowName.paper_qa.value,
@@ -207,7 +211,13 @@ def prepare_agent_message_run(session: Session, request: AgentMessageRequest) ->
     )
     runs.append_event(run.id, "agent_message_received", payload_json={"thread_id": thread.id})
     session.commit()
-    return PreparedAgentRun(thread_id=thread.id, run_id=run.id, deepagent_thread_id=thread.deepagent_thread_id or "")
+    return PreparedAgentRun(
+        thread_id=thread.id,
+        run_id=run.id,
+        deepagent_thread_id=thread.deepagent_thread_id or "",
+        active_paper_id=active_paper_id,
+        active_paper_system_info=active_paper_system_info,
+    )
 
 
 def list_run_events(session: Session, run_id: int, after_sequence: int | None = None) -> list[RunEventRead]:
@@ -257,7 +267,7 @@ def encode_agent_message_stream(session: Session, request: AgentMessageRequest) 
         yield json.dumps(event.model_dump(mode="json"), ensure_ascii=False) + "\n"
 
 
-def _agent_context(thread_id: int, run_id: int, request: AgentMessageRequest, session: Session) -> PaperClawContext:
+def _agent_context(prepared: PreparedAgentRun, request: AgentMessageRequest) -> PaperClawContext:
     settings = get_settings()
     if request.model is not None:
         model = request.model
@@ -280,9 +290,10 @@ def _agent_context(thread_id: int, run_id: int, request: AgentMessageRequest, se
     if not model or not model.strip():
         raise ValueError("PAPER_CLAW_CHAT_MODEL is not set.")
     return PaperClawContext(
-        thread_id=thread_id,
-        run_id=run_id,
-        active_paper_id=request.active_paper_id,
+        thread_id=prepared.thread_id,
+        run_id=prepared.run_id,
+        active_paper_id=prepared.active_paper_id,
+        active_paper_system_info=prepared.active_paper_system_info,
         model=model,
         api_key=api_key,
         base_url=base_url,
@@ -293,6 +304,33 @@ def _agent_context(thread_id: int, run_id: int, request: AgentMessageRequest, se
         rate_limiter=_chat_rate_limiter(settings),
         chat_provider_name=provider_name,
     )
+
+
+def _resolve_active_paper_id(session: Session, thread: Thread, request: AgentMessageRequest) -> int | None:
+    if request.active_paper_id is not None:
+        if session.get(Paper, request.active_paper_id) is None:
+            raise ValueError(f"Paper {request.active_paper_id} not found")
+        thread.current_focus_paper_id = request.active_paper_id
+        return request.active_paper_id
+    return thread.current_focus_paper_id
+
+
+def _active_paper_system_info(session: Session, paper_id: int | None) -> str | None:
+    if paper_id is None:
+        return None
+    paper = session.get(Paper, paper_id)
+    if paper is None:
+        return f"System info: Active paper id is #{paper_id}, but it was not found in the paper catalog."
+    details = [f"System info: Active paper is #{paper.id}: {paper.title}."]
+    if paper.year is not None:
+        details.append(f"Year: {paper.year}.")
+    if paper.authors_json:
+        details.append(f"Authors: {', '.join(str(author) for author in paper.authors_json[:5])}.")
+    details.append(
+        'Use this paper as the default target when the user says "this paper", "the paper", '
+        "or asks for paper-specific retrieval, QA, artifact, or report work without naming another paper."
+    )
+    return "\n".join(details)
 
 
 def _chat_rate_limiter(settings: Settings) -> InMemoryRateLimiter | None:

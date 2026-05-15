@@ -298,6 +298,7 @@ class PaperClawContext:
     thread_id: int | None = None
     run_id: int | None = None
     active_paper_id: int | None = None
+    active_paper_system_info: str | None = None
     model: str | None = None
     api_key: str | None = None
     base_url: str | None = None

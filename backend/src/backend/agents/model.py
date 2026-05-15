@@ -8,6 +8,7 @@ from typing import Any
 
 from langchain.agents.middleware import ModelRequest, ModelResponse, wrap_model_call
 from langchain.chat_models import init_chat_model
+from langchain_core.messages import SystemMessage
 
 from backend.schemas import PaperClawContext
 from backend.settings import REPO_ROOT
@@ -42,11 +43,30 @@ def apply_runtime_model(request: ModelRequest) -> None:
 @wrap_model_call
 def paper_claw_model_middleware(request: ModelRequest, handler: Callable[[ModelRequest], ModelResponse]) -> ModelResponse:
     model = runtime_model(request)
-    effective_request = request if model is None else request.override(model=model)
+    overrides: dict[str, Any] = {}
+    if model is not None:
+        overrides["model"] = model
+    messages = _messages_with_active_paper_info(request)
+    if messages is not request.messages:
+        overrides["messages"] = messages
+    effective_request = request if not overrides else request.override(**overrides)
     _log_model_request(effective_request)
     response = handler(effective_request)
     _log_model_response(effective_request, response)
     return response
+
+
+def _messages_with_active_paper_info(request: ModelRequest) -> list[Any]:
+    context = request.runtime.context
+    if not isinstance(context, PaperClawContext) or not context.active_paper_system_info:
+        return request.messages
+    injected = SystemMessage(content=context.active_paper_system_info)
+    messages = list(request.messages)
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if getattr(message, "type", None) == "human" or (isinstance(message, dict) and message.get("role") == "user"):
+            return [*messages[:index], injected, *messages[index:]]
+    return [*messages, injected]
 
 
 def _log_model_request(request: ModelRequest) -> None:
@@ -132,6 +152,7 @@ def _context_payload(context: Any) -> dict[str, Any] | None:
         "thread_id": context.thread_id,
         "run_id": context.run_id,
         "active_paper_id": context.active_paper_id,
+        "has_active_paper_system_info": context.active_paper_system_info is not None,
         "model": context.model,
         "has_api_key": context.api_key is not None,
         "base_url": context.base_url,
