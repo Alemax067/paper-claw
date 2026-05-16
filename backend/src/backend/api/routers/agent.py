@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from backend.agents.runner import cancel_run, encode_agent_message_stream, list_run_events, submit_agent_message
+from backend.agents.runner import cancel_run, encode_agent_message_stream, execute_agent_run, list_run_events, submit_agent_message
 from backend.api.deps import get_db_session
 from backend.schemas import AgentMessageRequest, AgentMessageResponse, RunEventRead, RunRead
 
@@ -12,8 +12,14 @@ router = APIRouter(tags=["agent"])
 
 
 @router.post("/agent/messages", response_model=AgentMessageResponse)
-def post_agent_message(request: AgentMessageRequest, session: Session = Depends(get_db_session)) -> AgentMessageResponse:
-    return submit_agent_message(session, request)
+def post_agent_message(
+    request: AgentMessageRequest,
+    background_tasks: BackgroundTasks,
+    session: Session = Depends(get_db_session),
+) -> AgentMessageResponse:
+    response = submit_agent_message(session, request)
+    background_tasks.add_task(execute_agent_run, response.run_id)
+    return response
 
 
 @router.post("/agent/messages/stream")

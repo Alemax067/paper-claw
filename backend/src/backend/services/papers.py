@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 from urllib.parse import urlparse
 
-from sqlalchemy import func, select
+from sqlalchemy import String, func, or_, select
 from sqlalchemy.orm import Session
 
 from backend.db.models import Paper, PaperIdentifier, PaperSourceRecord
@@ -82,6 +82,25 @@ def search_papers_by_title(session: Session, title: str, limit: int = 10) -> lis
     return list(session.scalars(statement.limit(limit)))
 
 
+def search_papers_catalog(session: Session, query: str, *, mode: str = "auto", limit: int = 10) -> list[PaperSearchResult]:
+    query = query.strip()
+    if not query:
+        return []
+    normalized_mode = mode.lower()
+    papers: list[tuple[Paper, str]] = []
+    if normalized_mode in {"auto", "identifier", "doi", "arxiv_id", "openalex_id"}:
+        papers.extend(_identifier_matches(session, query, normalized_mode))
+        if papers and normalized_mode != "auto":
+            return _local_results(_dedupe_papers(papers)[:limit])
+    if normalized_mode in {"auto", "title"}:
+        papers.extend((paper, "title") for paper in search_papers_by_title(session, query, limit=limit))
+        if papers and normalized_mode == "title":
+            return _local_results(_dedupe_papers(papers)[:limit])
+    if normalized_mode in {"auto", "keyword"}:
+        papers.extend((paper, "keyword") for paper in _keyword_matches(session, query, limit=limit))
+    return _local_results(_dedupe_papers(papers)[:limit])
+
+
 def upsert_paper_from_search_result(session: Session, result: PaperSearchResult) -> Paper:
     identifiers = identifiers_from_search_result(result)
     for identifier in identifiers:
@@ -110,6 +129,85 @@ def upsert_paper_from_search_result(session: Session, result: PaperSearchResult)
     _upsert_paper_links(session, paper, result, identifiers)
     session.flush()
     return paper
+
+
+def _identifier_matches(session: Session, query: str, mode: str) -> list[tuple[Paper, str]]:
+    candidates: list[tuple[str, str]] = []
+    if mode in {"auto", "identifier", "doi"} and _looks_like_doi(query):
+        candidates.append((IdentifierType.doi.value, query))
+    if mode in {"auto", "identifier", "arxiv_id"} and _looks_like_arxiv(query):
+        candidates.append((IdentifierType.arxiv.value, query))
+    if mode in {"auto", "identifier", "openalex_id"} and _looks_like_openalex(query):
+        candidates.append((IdentifierType.openalex.value, query))
+    matches: list[tuple[Paper, str]] = []
+    for identifier_type, value in candidates:
+        paper = find_paper_by_identifier(session, identifier_type, value)
+        if paper is not None:
+            matches.append((paper, f"{identifier_type}_match"))
+    return matches
+
+
+def _keyword_matches(session: Session, query: str, *, limit: int) -> list[Paper]:
+    terms = [term for term in normalize_title(query).split(" ") if len(term) >= 3][:6]
+    if not terms:
+        return []
+    statement = select(Paper)
+    for term in terms:
+        pattern = f"%{term}%"
+        statement = statement.where(
+            or_(
+                Paper.title.ilike(pattern),
+                Paper.abstract.ilike(pattern),
+                Paper.venue.ilike(pattern),
+                Paper.authors_json.cast(String).ilike(pattern),
+            )
+        )
+    return list(session.scalars(statement.limit(limit)))
+
+
+def _local_results(papers: list[tuple[Paper, str]]) -> list[PaperSearchResult]:
+    return [
+        PaperSearchResult(
+            source=PaperSource.local.value,
+            source_record_id=f"paper:{paper.id}",
+            title=paper.title,
+            abstract=paper.abstract,
+            authors=list(paper.authors_json or []),
+            year=paper.year,
+            venue=paper.venue,
+            landing_page_url=paper.landing_page_url,
+            pdf_url=paper.best_pdf_url,
+            score=1.0 if match_reason.endswith("_match") else None,
+            raw={"paper_id": paper.id, "local": True, "match_reason": match_reason},
+        )
+        for paper, match_reason in papers
+    ]
+
+
+def _dedupe_papers(papers: list[tuple[Paper, str]]) -> list[tuple[Paper, str]]:
+    seen: set[int] = set()
+    deduped: list[tuple[Paper, str]] = []
+    for paper, match_reason in papers:
+        if paper.id in seen:
+            continue
+        seen.add(paper.id)
+        deduped.append((paper, match_reason))
+    return deduped
+
+
+def _looks_like_doi(value: str) -> bool:
+    normalized = _DOI_PREFIX_RE.sub("", value).strip().lower()
+    return normalized.startswith("10.") and "/" in normalized
+
+
+def _looks_like_arxiv(value: str) -> bool:
+    normalized = _ARXIV_PREFIX_RE.sub("", value).strip().removesuffix(".pdf")
+    return bool(re.search(r"\d{4}\.\d{4,5}(?:v\d+)?", normalized))
+
+
+def _looks_like_openalex(value: str) -> bool:
+    normalized = _OPENALEX_PREFIX_RE.sub("", value).strip().upper()
+    return normalized.startswith("W") and any(char.isdigit() for char in normalized)
 
 
 def _update_paper_metadata(paper: Paper, result: PaperSearchResult) -> None:

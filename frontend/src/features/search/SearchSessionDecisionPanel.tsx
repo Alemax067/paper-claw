@@ -7,19 +7,29 @@ import { useAsyncResource } from '../../hooks/useAsyncResource';
 
 interface SearchSessionDecisionPanelProps {
   searchSessionId: number;
+  candidateIds?: number[];
+  recommendationReason?: string | null;
   onRefresh: () => void;
+  onActivePaperSelected?: (paperId: number) => void;
 }
 
-export function SearchSessionDecisionPanel({ searchSessionId, onRefresh }: SearchSessionDecisionPanelProps) {
+export function SearchSessionDecisionPanel({ searchSessionId, candidateIds, recommendationReason, onRefresh, onActivePaperSelected }: SearchSessionDecisionPanelProps) {
   const [reason, setReason] = useState('');
   const [actionError, setActionError] = useState<string | null>(null);
   const loader = useCallback(() => api.getSearchSession(searchSessionId), [searchSessionId]);
   const { data: session, loading, error, reload } = useAsyncResource(loader, [searchSessionId]);
+  const recommendedCandidates = candidateIds?.length
+    ? session?.candidates.filter((candidate) => candidateIds.includes(candidate.id))
+    : session?.candidates;
 
   const confirm = async (candidateId: number) => {
     setActionError(null);
     try {
-      await api.confirmSearchCandidate(searchSessionId, { candidate_id: candidateId, update_thread_focus: true });
+      const updated = await api.confirmSearchCandidate(searchSessionId, { candidate_id: candidateId, update_thread_focus: true });
+      const selected = updated.candidates.find((candidate) => candidate.id === updated.selected_candidate_id);
+      if (selected?.paper_id != null) {
+        onActivePaperSelected?.(selected.paper_id);
+      }
       reload();
       onRefresh();
     } catch (caught) {
@@ -44,7 +54,7 @@ export function SearchSessionDecisionPanel({ searchSessionId, onRefresh }: Searc
   }
 
   return (
-    <section className="panel">
+    <section className="panel search-confirmation-panel">
       <div className="panel-header">
         <p className="eyebrow">Search confirmation</p>
         <h2>Candidate selection</h2>
@@ -59,7 +69,8 @@ export function SearchSessionDecisionPanel({ searchSessionId, onRefresh }: Searc
               <StatusBadge status={session.status} />
               <span>{session.query_text}</span>
             </div>
-            {session.candidates.map((candidate) => (
+            {recommendationReason && <p className="candidate-reason">{recommendationReason}</p>}
+            {recommendedCandidates?.map((candidate) => (
               <article className="candidate-card" key={candidate.id}>
                 <div className="meta-row">
                   <span>rank {candidate.rank}</span>
@@ -68,7 +79,7 @@ export function SearchSessionDecisionPanel({ searchSessionId, onRefresh }: Searc
                   {candidate.score != null && <span>score {candidate.score.toFixed(2)}</span>}
                 </div>
                 <h3>{candidate.title}</h3>
-                {candidate.abstract && <p>{candidate.abstract}</p>}
+                {candidate.abstract && <p className="candidate-abstract">{candidate.abstract}</p>}
                 <div className="meta-row">
                   {candidate.doi && <span>doi {candidate.doi}</span>}
                   {candidate.arxiv_id && <span>arxiv {candidate.arxiv_id}</span>}

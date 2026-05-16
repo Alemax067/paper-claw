@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     database_url: str = DEFAULT_DATABASE_URL
     data_dir: Path = Field(default_factory=lambda: DATA_DIR)
     storage_root: Path | None = None
-    arxiv_min_interval_seconds: float = 1.0
+    arxiv_min_interval_seconds: float = 3.0
     arxiv_max_retries: int = 3
     arxiv_backoff_base_seconds: float = 1.0
     arxiv_backoff_max_seconds: float = 30.0

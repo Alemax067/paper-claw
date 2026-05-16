@@ -449,6 +449,80 @@ button:focus-visible {
   line-height: 1.55;
 }
 
+.markdown-message {
+  margin-top: 0.55rem;
+  line-height: 1.6;
+}
+
+.markdown-message > :first-child {
+  margin-top: 0;
+}
+
+.markdown-message > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-message p,
+.markdown-message ul,
+.markdown-message ol,
+.markdown-message blockquote,
+.markdown-message pre,
+.markdown-message table {
+  margin: 0.65rem 0 0;
+}
+
+.markdown-message ul,
+.markdown-message ol {
+  padding-left: 1.4rem;
+}
+
+.markdown-message li + li {
+  margin-top: 0.25rem;
+}
+
+.markdown-message code {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: rgba(17, 18, 15, 0.55);
+  padding: 0.08rem 0.25rem;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+.markdown-message pre {
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: rgba(17, 18, 15, 0.72);
+  padding: 0.75rem;
+}
+
+.markdown-message pre code {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.markdown-message blockquote {
+  border-left: 3px solid var(--accent-cyan);
+  color: var(--ink-muted);
+  padding-left: 0.85rem;
+}
+
+.markdown-message table {
+  width: 100%;
+  border-collapse: collapse;
+  overflow: auto;
+  font-size: 0.9rem;
+}
+
+.markdown-message th,
+.markdown-message td {
+  border: 1px solid var(--line);
+  padding: 0.45rem 0.55rem;
+  text-align: left;
+}
+
 .timeline {
   display: grid;
   gap: 0.65rem;
@@ -655,6 +729,23 @@ button:focus-visible {
   max-width: min(78ch, 86%);
   margin-bottom: 0;
   border-color: rgba(216, 255, 99, 0.35);
+}
+
+.search-confirmation-panel .panel-body {
+  max-height: min(34rem, 58vh);
+  overflow: auto;
+}
+
+.candidate-reason {
+  color: var(--ink-muted);
+  font-size: 0.85rem;
+}
+
+.candidate-abstract {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .chat-composer__box {

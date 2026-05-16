@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../api/client';
 import { getErrorMessage } from '../../api/errors';
-import type { AgentStreamEvent, RunEventRead, RunRead } from '../../api/types';
+import type { RunRead } from '../../api/types';
 import { ErrorBanner } from '../../components/ErrorBanner';
 import { LoadingBlock } from '../../components/LoadingBlock';
 import { StatusBadge } from '../../components/StatusBadge';
@@ -11,6 +11,7 @@ import { MessageComposer } from './MessageComposer';
 import { RunDecisionPanel } from './RunDecisionPanel';
 import { MessageTranscript } from './MessageTranscript';
 import { AgentActivity } from './AgentActivity';
+import { SearchSessionDecisionPanel } from '../search/SearchSessionDecisionPanel';
 
 interface AgentPanelProps {
   selectedThreadId: number | null;
@@ -22,6 +23,7 @@ interface AgentPanelProps {
   onRunSelected: (runId: number) => void;
   onRunLoaded: (run: RunRead | null) => void;
   onRefresh: () => void;
+  onActivePaperSelected?: (paperId: number | null) => void;
   onError: (message: string | null) => void;
 }
 
@@ -38,11 +40,10 @@ export function AgentPanel({
   onRunSelected,
   onRunLoaded,
   onRefresh,
+  onActivePaperSelected,
   onError,
 }: AgentPanelProps) {
-  const [streamingText, setStreamingText] = useState('');
-  const [streamStatus, setStreamStatus] = useState<string | null>(null);
-  const [streamRun, setStreamRun] = useState<RunRead | null>(null);
+  const [submitStatus, setSubmitStatus] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   const loader = useCallback(async () => {
@@ -70,11 +71,30 @@ export function AgentPanel({
     void loadRun();
   }, [loadRun]);
 
-  usePolling(loadRun, 2200, Boolean(activeRunId && activeRun && !terminalRunStatuses.has(activeRun.status)));
+  useEffect(() => {
+    if (selectedThreadId == null || !thread?.runs.length) {
+      return;
+    }
+    if (activeRunId != null && thread.runs.some((run) => run.id === activeRunId)) {
+      return;
+    }
+    const latestRun = [...thread.runs].sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime())[0];
+    onRunSelected(latestRun.id);
+    onRunLoaded(latestRun);
+  }, [activeRunId, onRunLoaded, onRunSelected, selectedThreadId, thread?.runs]);
+
+  useEffect(() => {
+    if (selectedThreadId == null || !thread) {
+      return;
+    }
+    onActivePaperSelected?.(thread.current_focus_paper_id);
+  }, [onActivePaperSelected, selectedThreadId, thread]);
+
+  usePolling(loadRun, 2200, Boolean(activeRunId && (!activeRun || !terminalRunStatuses.has(activeRun.status))));
 
   useEffect(() => {
     requestAnimationFrame(() => bottomRef.current?.scrollIntoView({ block: 'end' }));
-  }, [selectedThreadId, thread?.messages.length, streamingText, activeRun?.events.length]);
+  }, [selectedThreadId, thread?.messages.length, submitStatus, activeRun?.events.length]);
 
   const cancelRun = async () => {
     if (!activeRunId || !activeRun || !cancellableRunStatuses.has(activeRun.status)) {
@@ -92,65 +112,33 @@ export function AgentPanel({
 
   const submitMessage = async (message: string) => {
     onError(null);
-    setStreamingText('');
-    setStreamStatus('Connecting to agent stream...');
-    setStreamRun(null);
-    let selectedRunId: number | null = null;
+    setSubmitStatus('Starting agent run...');
     try {
-      const response = await api.sendAgentMessageStream(
-        {
-          thread_id: selectedThreadId,
-          active_paper_id: activePaperId,
-          message,
-        },
-        (event: AgentStreamEvent) => {
-          if (selectedRunId !== event.run_id) {
-            selectedRunId = event.run_id;
-            onThreadSelected(event.thread_id);
-            onRunSelected(event.run_id);
-            onRefresh();
-          }
-          setStreamRun((current) => updateStreamRun(current, event));
-          if (event.type === 'run_started') {
-            setStreamStatus('Agent run started');
-          } else if (event.type === 'agent_chunk') {
-            const mode = typeof event.payload.mode === 'string' ? event.payload.mode : 'chunk';
-            setStreamStatus(`Streaming ${mode}`);
-            if (mode === 'messages' && event.message) {
-              setStreamingText((current) => current + event.message);
-            }
-          } else if (event.type === 'run_completed') {
-            setStreamStatus(null);
-            setStreamingText('');
-            setStreamRun(null);
-            reload();
-            void loadRun();
-          } else if (event.type === 'run_failed') {
-            setStreamStatus(null);
-            onError(event.error ?? 'Agent run failed');
-            reload();
-            void loadRun();
-          } else if (event.type === 'run_cancelled') {
-            setStreamStatus(null);
-            setStreamingText('');
-            setStreamRun(null);
-            reload();
-            void loadRun();
-          }
-        },
-      );
-      if (response.error) {
-        onError(response.error);
-      }
+      const response = await api.sendAgentMessage({
+        thread_id: selectedThreadId,
+        active_paper_id: activePaperId,
+        message,
+      });
+      onThreadSelected(response.thread_id);
+      onRunSelected(response.run_id);
+      setSubmitStatus('Agent run is running in the background');
+      onRefresh();
+      window.setTimeout(() => setSubmitStatus(null), 1800);
     } catch (caught) {
-      setStreamStatus(null);
+      setSubmitStatus(null);
       onError(getErrorMessage(caught));
     }
   };
 
   const threadRuns = activeRun ? mergeRuns(thread?.runs ?? [], activeRun) : thread?.runs ?? [];
+  const candidateRecommendations = useMemo(() => pendingCandidateRecommendations(activeRun), [activeRun]);
   const showRunDecision = activeRun?.status === 'waiting_for_user';
   const showCancelRun = Boolean(activeRunId && activeRun && cancellableRunStatuses.has(activeRun.status));
+  const showRunActivity = Boolean(
+    activeRun &&
+      activeRun.status !== 'succeeded' &&
+      (activeRun.events.length > 0 || !terminalRunStatuses.has(activeRun.status) || activeRun.error_message)
+  );
 
   return (
     <section className="chat-main" aria-label="Chat workspace">
@@ -163,7 +151,7 @@ export function AgentPanel({
           {activeRun ? <StatusBadge status={activeRun.status} /> : <span>no active run</span>}
           {activeRunId && <span>run #{activeRunId}</span>}
           {activePaperId ? <span>paper #{activePaperId} pinned</span> : <span>no paper pinned</span>}
-          {streamStatus && <span>{streamStatus}</span>}
+          {submitStatus && <span>{submitStatus}</span>}
         </div>
       </header>
       <div className="chat-transcript-scroll">
@@ -175,15 +163,33 @@ export function AgentPanel({
             <RunDecisionPanel run={activeRun} onRefresh={onRefresh} />
           </div>
         )}
-        {(streamStatus || streamingText || streamRun) && (
+        {candidateRecommendations.length > 0 && (
+          <div className="inline-decision-stack">
+            {candidateRecommendations.map((recommendation) => (
+              <SearchSessionDecisionPanel
+                key={recommendation.searchSessionId}
+                searchSessionId={recommendation.searchSessionId}
+                candidateIds={recommendation.candidateIds}
+                recommendationReason={recommendation.reason}
+                onRefresh={onRefresh}
+                onActivePaperSelected={onActivePaperSelected}
+              />
+            ))}
+          </div>
+        )}
+        {showRunActivity && activeRun && (
           <article className="message message-assistant message-streaming">
             <div className="meta-row">
               <span>assistant</span>
-              <span>stream</span>
-              {streamStatus && <span>{streamStatus}</span>}
+              <span>{terminalRunStatuses.has(activeRun.status) ? 'run activity' : 'background run'}</span>
+              <span>{activeRun.status}</span>
             </div>
-            {streamRun && <AgentActivity run={streamRun} />}
-            {streamingText ? <p>{streamingText}</p> : <p>Waiting for streamed output...</p>}
+            <AgentActivity run={activeRun} />
+            {terminalRunStatuses.has(activeRun.status) ? (
+              activeRun.error_message ? <p>{activeRun.error_message}</p> : null
+            ) : (
+              <p>Agent run is continuing on the backend. This view will refresh from persisted events.</p>
+            )}
           </article>
         )}
         <div ref={bottomRef} />
@@ -195,39 +201,36 @@ export function AgentPanel({
   );
 }
 
-function updateStreamRun(current: RunRead | null, event: AgentStreamEvent): RunRead {
-  const now = new Date().toISOString();
-  const base = current ?? {
-    id: event.run_id,
-    thread_id: event.thread_id,
-    workflow: 'paper_qa',
-    status: event.status ?? 'running',
-    error_message: event.error ?? null,
-    input_json: null,
-    output_json: null,
-    events: [],
-    created_at: now,
-    updated_at: now,
-  };
-  const run: RunRead = {
-    ...base,
-    status: event.status ?? base.status,
-    error_message: event.error ?? base.error_message,
-    updated_at: now,
-  };
-  if (!event.event_type || event.sequence == null || run.events.some((item) => item.sequence === event.sequence)) {
-    return run;
+interface CandidateRecommendation {
+  searchSessionId: number;
+  candidateIds: number[];
+  reason: string | null;
+}
+
+function pendingCandidateRecommendations(run: RunRead | null): CandidateRecommendation[] {
+  const finished = new Set<number>();
+  const recommendations = new Map<number, CandidateRecommendation>();
+  for (const event of run?.events ?? []) {
+    const value = event.payload.search_session_id;
+    if (typeof value !== 'number') {
+      continue;
+    }
+    if (event.event_type === 'search_candidate_confirmed' || event.event_type === 'search_session_rejected') {
+      finished.add(value);
+      continue;
+    }
+    if (event.event_type === 'paper_candidates_recommended') {
+      const ids = Array.isArray(event.payload.candidate_ids)
+        ? event.payload.candidate_ids.filter((candidateId): candidateId is number => typeof candidateId === 'number')
+        : [];
+      recommendations.set(value, {
+        searchSessionId: value,
+        candidateIds: ids,
+        reason: typeof event.payload.reason === 'string' ? event.payload.reason : null,
+      });
+    }
   }
-  const runEvent: RunEventRead = {
-    id: event.sequence,
-    run_id: event.run_id,
-    sequence: event.sequence,
-    event_type: event.event_type,
-    level: event.error ? 'error' : 'info',
-    payload: event.payload,
-    created_at: now,
-  };
-  return { ...run, events: [...run.events, runEvent] };
+  return [...recommendations.values()].filter((recommendation) => !finished.has(recommendation.searchSessionId));
 }
 
 function mergeRuns(runs: RunRead[], activeRun: RunRead): RunRead[] {

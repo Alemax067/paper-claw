@@ -16,6 +16,7 @@ interface ChatPageProps {
   onRunSelected: (runId: number | null) => void;
   onRunUpdated: (run: RunRead | null) => void;
   onRefresh: () => void;
+  onActivePaperSelected?: (paperId: number | null) => void;
   onError: (message: string | null) => void;
 }
 
@@ -36,6 +37,7 @@ export function ChatPage({
   onRunSelected,
   onRunUpdated,
   onRefresh,
+  onActivePaperSelected,
   onError,
 }: ChatPageProps) {
   const [sidebarWidth, setSidebarWidth] = useState(sidebarLimits.default);
@@ -64,6 +66,7 @@ export function ChatPage({
     onThreadSelected(null);
     onRunSelected(null);
     onRunUpdated(null);
+    onActivePaperSelected?.(null);
     onError(null);
   };
 
@@ -123,6 +126,7 @@ export function ChatPage({
           onRunSelected={onRunSelected}
           onRunLoaded={onRunUpdated}
           onRefresh={onRefresh}
+          onActivePaperSelected={onActivePaperSelected}
           onError={onError}
         />
       </div>

@@ -21,14 +21,18 @@ class FakeClock:
         self.now += seconds
 
 
+def test_arxiv_rate_limiter_defaults_to_three_seconds():
+    assert ArxivRateLimiter().min_interval_seconds == 3.0
+
+
 def test_arxiv_rate_limiter_waits_between_calls():
     clock = FakeClock()
-    limiter = ArxivRateLimiter(min_interval_seconds=1.0, monotonic=clock.monotonic, sleep=clock.sleep)
+    limiter = ArxivRateLimiter(min_interval_seconds=3.0, monotonic=clock.monotonic, sleep=clock.sleep)
 
     limiter.wait()
     limiter.wait()
 
-    assert clock.sleeps == [1.0]
+    assert clock.sleeps == [3.0]
 
 
 def test_arxiv_search_and_download_share_limiter(tmp_path):
@@ -87,3 +91,43 @@ def test_arxiv_retry_reraises_last_error():
 
     with pytest.raises(RuntimeError, match="boom"):
         client._with_retry(lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+
+
+def test_arxiv_id_mode_uses_exact_id_lookup():
+    captured = []
+    fake_arxiv_client = SimpleNamespace(results=lambda search: captured.append(search) or [])
+    client = ArxivClient(limiter=ArxivRateLimiter(min_interval_seconds=0), arxiv_client=fake_arxiv_client)
+
+    response = client.search("https://arxiv.org/abs/2401.00001v2", mode="arxiv_id")
+
+    assert response.query_used == "id_list:2401.00001"
+    assert captured[0].id_list == ["2401.00001"]
+
+
+def test_arxiv_offset_and_max_results_are_applied():
+    results = [
+        SimpleNamespace(
+            get_short_id=lambda index=index: f"2401.0000{index}",
+            doi=None,
+            title=f"Paper {index}",
+            summary="abstract",
+            authors=[],
+            published=datetime(2024, 1, 1, tzinfo=UTC),
+            updated=datetime(2024, 1, 2, tzinfo=UTC),
+            primary_category="cs.AI",
+            categories=["cs.AI"],
+            entry_id=f"https://arxiv.org/abs/2401.0000{index}",
+            pdf_url=f"https://arxiv.org/pdf/2401.0000{index}",
+        )
+        for index in range(30)
+    ]
+    captured = []
+    fake_arxiv_client = SimpleNamespace(results=lambda search: captured.append(search) or results)
+    client = ArxivClient(limiter=ArxivRateLimiter(min_interval_seconds=0), arxiv_client=fake_arxiv_client)
+
+    response = client.search("agent", max_results=100, mode="keyword", offset=2)
+
+    assert captured[0].max_results == 27
+    assert len(response.results) == 25
+    assert response.results[0].title == "Paper 2"
+    assert response.warnings

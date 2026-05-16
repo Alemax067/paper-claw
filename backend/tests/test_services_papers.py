@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from backend.db.models import Paper
+from backend.db.repositories import PaperRepository
 from backend.db.types import IdentifierType
 from backend.schemas import PaperSearchResult
-from backend.services.papers import find_paper_by_identifier, normalize_identifier, search_papers_by_title, upsert_paper_from_search_result
+from backend.services.papers import find_paper_by_identifier, normalize_identifier, search_papers_by_title, search_papers_catalog, upsert_paper_from_search_result
 
 
 def test_normalize_identifier():
@@ -65,3 +66,53 @@ def test_upsert_paper_from_search_result_deduplicates_by_title(session):
 
     assert len(session.query(Paper).all()) == 1
     assert paper.authors_json == ["B"]
+
+
+def test_search_papers_catalog_finds_doi_identifier(session):
+    paper = Paper(title="DOI Paper")
+    session.add(paper)
+    session.flush()
+    PaperRepository(session).upsert_identifier(paper.id, IdentifierType.doi.value, "10.1000/example", is_primary=True)
+    session.commit()
+
+    results = search_papers_catalog(session, "https://doi.org/10.1000/EXAMPLE", mode="auto")
+
+    assert results[0].title == "DOI Paper"
+    assert results[0].source == "local"
+    assert results[0].raw["match_reason"] == "doi_match"
+
+
+def test_search_papers_catalog_finds_arxiv_identifier(session):
+    paper = Paper(title="arXiv Paper")
+    session.add(paper)
+    session.flush()
+    PaperRepository(session).upsert_identifier(paper.id, IdentifierType.arxiv.value, "2401.00001", is_primary=True)
+    session.commit()
+
+    results = search_papers_catalog(session, "https://arxiv.org/abs/2401.00001v2", mode="auto")
+
+    assert results[0].title == "arXiv Paper"
+    assert results[0].raw["match_reason"] == "arxiv_match"
+
+
+def test_search_papers_catalog_finds_openalex_identifier(session):
+    paper = Paper(title="OpenAlex Paper")
+    session.add(paper)
+    session.flush()
+    PaperRepository(session).upsert_identifier(paper.id, IdentifierType.openalex.value, "W123", is_primary=True)
+    session.commit()
+
+    results = search_papers_catalog(session, "https://openalex.org/W123", mode="auto")
+
+    assert results[0].title == "OpenAlex Paper"
+    assert results[0].raw["match_reason"] == "openalex_match"
+
+
+def test_search_papers_catalog_keyword_searches_metadata(session):
+    session.add(Paper(title="Unrelated", abstract="recursive agent systems", venue="Conference", authors_json=["A"] ))
+    session.commit()
+
+    results = search_papers_catalog(session, "recursive agent", mode="keyword")
+
+    assert results[0].title == "Unrelated"
+    assert results[0].raw["match_reason"] == "keyword"

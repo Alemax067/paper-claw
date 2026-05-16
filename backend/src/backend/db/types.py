@@ -97,6 +97,7 @@ class IdentifierType(StrEnum):
 
 
 class PaperSource(StrEnum):
+    local = "local"
     arxiv = "arxiv"
     openalex = "openalex"
     manual_upload = "manual_upload"

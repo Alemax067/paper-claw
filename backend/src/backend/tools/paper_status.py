@@ -6,7 +6,7 @@ from langchain_core.tools import tool
 
 from backend.db.models import Artifact, DocumentChunk, Paper, PaperArtifact, ParseJob, ProcessedDocument, Report, Thread
 from backend.db.types import ArtifactStatus
-from backend.services.papers import search_papers_by_title
+from backend.services.papers import search_papers_catalog
 from backend.tools.context import current_tool_context, resolve_active_paper_id, tool_session
 
 
@@ -40,11 +40,23 @@ def set_thread_focus(paper_id: int, thread_id: int | None = None) -> dict:
 
 
 @tool
-def search_local_papers(query: str, limit: int = 10) -> dict:
-    """Search the local paper catalog by title."""
+def search_local_papers(query: str, mode: str = "auto", limit: int = 10) -> dict:
+    """Search the local paper catalog by identifier, title, or keyword."""
     with tool_session() as session:
-        papers = search_papers_by_title(session, query, limit=limit)
-        return {"papers": [_paper_summary(paper) for paper in papers]}
+        candidates = search_papers_catalog(session, query, mode=mode, limit=limit)
+        return {
+            "papers": [
+                {
+                    "id": candidate.raw.get("paper_id"),
+                    "title": candidate.title,
+                    "year": candidate.year,
+                    "venue": candidate.venue,
+                    "authors": candidate.authors,
+                    "match_reason": candidate.raw.get("match_reason"),
+                }
+                for candidate in candidates
+            ]
+        }
 
 
 @tool

@@ -1,6 +1,7 @@
 import type { MessageRead, RunRead } from '../../api/types';
 import { EmptyState } from '../../components/EmptyState';
 import { AgentActivity } from './AgentActivity';
+import { MarkdownMessage } from './MarkdownMessage';
 
 interface MessageTranscriptProps {
   messages: MessageRead[];
@@ -32,7 +33,7 @@ export function MessageTranscript({ messages, runs = [] }: MessageTranscriptProp
               <span>{new Date(message.created_at).toLocaleString()}</span>
             </div>
             {message.role === 'assistant' && run && <AgentActivity run={run} />}
-            {message.content_text && <p>{message.content_text}</p>}
+            {message.content_text && (message.role === 'assistant' ? <MarkdownMessage content={message.content_text} /> : <p>{message.content_text}</p>)}
             {message.content_json && (
               <details>
                 <summary>payload</summary>

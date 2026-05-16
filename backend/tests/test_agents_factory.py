@@ -34,7 +34,7 @@ def test_subagents_have_explicit_isolated_tools():
         subagent["name"]: {tool.name for tool in subagent["tools"]}
         for subagent in subagents
     }
-    assert tool_names_by_agent["paper-discovery-specialist"] == {"search_papers", "confirm_paper_candidate", "get_paper", "search_local_papers"}
+    assert tool_names_by_agent["paper-discovery-specialist"] == {"search_papers", "recommend_paper_candidates", "get_paper"}
     assert tool_names_by_agent["paper-ingestion-specialist"] == {
         "get_paper_pipeline_status",
         "list_paper_artifacts",
@@ -48,6 +48,15 @@ def test_subagents_have_explicit_isolated_tools():
     assert tool_names_by_agent["paper-report-specialist"] == {"get_paper_pipeline_status", "list_paper_reports", "generate_paper_report"}
     assert all("tools" in subagent for subagent in subagents)
     assert all("answer_paper_question" not in names for names in tool_names_by_agent.values())
+
+
+def test_discovery_prompt_returns_candidates_for_deterministic_confirmation():
+    subagent = create_paper_claw_subagents()[0]
+
+    assert "Do not confirm, upsert, or claim that an external candidate is active" in subagent["system_prompt"]
+    assert "call recommend_paper_candidates exactly once" in subagent["system_prompt"]
+    assert "candidate_found_unconfirmed" in subagent["system_prompt"]
+    assert "interrupt_on" not in subagent
 
 
 def test_agent_factory_constructs_without_external_model_call():

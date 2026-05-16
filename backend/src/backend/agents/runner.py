@@ -17,6 +17,7 @@ from backend.agents.main_agent import create_paper_claw_agent
 from backend.api.serializers import run_event_read, run_read
 from backend.db.models import AgentRun, AgentRunEvent, Paper, Thread
 from backend.db.repositories import AgentRunRepository, ThreadRepository
+from backend.db.session import get_session
 from backend.db.types import EventLevel, MessageRole, MessageSource, RunStatus, WorkflowName
 from backend.schemas import AgentMessageRequest, AgentMessageResponse, AgentStreamEvent, ApprovalRequest, RunEventRead, RunRead
 from backend.settings import Settings, get_settings
@@ -35,23 +36,31 @@ class PreparedAgentRun:
 
 
 def submit_agent_message(session: Session, request: AgentMessageRequest) -> AgentMessageResponse:
-    final_event: AgentStreamEvent | None = None
-    fallback_event: AgentStreamEvent | None = None
-    for event in stream_agent_message(session, request):
-        fallback_event = event
-        if event.type in {"run_completed", "run_failed", "run_cancelled"}:
-            final_event = event
-    event = final_event or fallback_event
-    if event is None:
-        raise RuntimeError("Agent stream produced no events")
+    prepared = prepare_agent_message_run(session, request)
     return AgentMessageResponse(
-        thread_id=event.thread_id,
-        run_id=event.run_id,
-        assistant_message_id=event.assistant_message_id,
-        status=event.status or RunStatus.failed.value,
-        message=event.message,
-        error=event.error,
+        thread_id=prepared.thread_id,
+        run_id=prepared.run_id,
+        status=RunStatus.running.value,
     )
+
+
+
+def execute_agent_run(run_id: int) -> None:
+    with get_session() as session:
+        prepared, request = prepare_prepared_agent_run(session, run_id)
+        for _event in _stream_agent_graph(session, prepared, request, {"messages": [{"role": "user", "content": request.message}]}):
+            pass
+
+
+
+def execute_agent_run_resume(run_id: int, request: ApprovalRequest) -> None:
+    with get_session() as session:
+        if request.decision == "cancel":
+            cancel_run(session, run_id)
+            return
+        prepared, message_request = prepare_prepared_agent_run(session, run_id)
+        for _event in _stream_agent_graph(session, prepared, message_request, Command(resume={"decisions": _resume_decisions(request)})):
+            pass
 
 
 def stream_agent_message(session: Session, request: AgentMessageRequest) -> Iterator[AgentStreamEvent]:
@@ -69,10 +78,7 @@ def stream_agent_message(session: Session, request: AgentMessageRequest) -> Iter
 def resume_agent_run(session: Session, run_id: int, request: ApprovalRequest) -> RunRead:
     if request.decision == "cancel":
         return cancel_run(session, run_id)
-    events = list(stream_agent_run_resume(session, run_id, request))
-    terminal = next((event for event in reversed(events) if event.type in {"run_completed", "run_failed", "run_cancelled", "run_waiting_for_user"}), None)
-    if terminal is None:
-        raise RuntimeError("Agent resume produced no terminal event")
+    prepare_agent_run_resume(session, run_id, request)
     run = session.get_one(AgentRun, run_id)
     return run_read(run)
 
@@ -87,6 +93,32 @@ def stream_agent_run_resume(session: Session, run_id: int, request: ApprovalRequ
         payload={"thread_id": prepared.thread_id},
     )
     yield from _stream_agent_graph(session, prepared, message_request, Command(resume={"decisions": _resume_decisions(request)}))
+
+
+def prepare_prepared_agent_run(session: Session, run_id: int) -> tuple[PreparedAgentRun, AgentMessageRequest]:
+    run = session.get(AgentRun, run_id)
+    if run is None:
+        raise ValueError("Run not found")
+    thread = session.get(Thread, run.thread_id) if run.thread_id is not None else None
+    if thread is None:
+        raise ValueError("Run thread not found")
+    input_json = dict(run.input_json or {})
+    input_json.pop("has_api_key", None)
+    message_request = AgentMessageRequest.model_validate({"message": input_json.get("message") or "", **input_json})
+    active_paper_id = thread.current_focus_paper_id
+    if input_json.get("active_paper_id") is not None:
+        active_paper_id = int(input_json["active_paper_id"])
+    return (
+        PreparedAgentRun(
+            thread_id=thread.id,
+            run_id=run.id,
+            deepagent_thread_id=run.deepagent_thread_id or thread.deepagent_thread_id or "",
+            active_paper_id=active_paper_id,
+            active_paper_system_info=_active_paper_system_info(session, active_paper_id),
+        ),
+        message_request,
+    )
+
 
 
 def prepare_agent_run_resume(session: Session, run_id: int, request: ApprovalRequest) -> tuple[PreparedAgentRun, AgentMessageRequest]:

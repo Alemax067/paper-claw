@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from backend.agents.runner import resume_agent_run
+from backend.agents.runner import execute_agent_run_resume, resume_agent_run
 from backend.api.deps import get_db_session
 from backend.api.serializers import search_session_read
 from backend.db.models import SearchSession
@@ -49,9 +49,17 @@ def reject_search_session(search_session_id: int, request: RejectSearchSessionRe
 
 
 @router.post("/agent/runs/{run_id}/approval", response_model=RunRead)
-def approve_run(run_id: int, request: ApprovalRequest, session: Session = Depends(get_db_session)) -> RunRead:
+def approve_run(
+    run_id: int,
+    request: ApprovalRequest,
+    background_tasks: BackgroundTasks,
+    session: Session = Depends(get_db_session),
+) -> RunRead:
     try:
-        return resume_agent_run(session, run_id, request)
+        run = resume_agent_run(session, run_id, request)
+        if request.decision != "cancel":
+            background_tasks.add_task(execute_agent_run_resume, run_id, request)
+        return run
     except ValueError as exc:
         detail = str(exc)
         if detail == "Run not found":

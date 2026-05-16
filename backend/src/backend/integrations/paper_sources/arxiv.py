@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -9,12 +10,17 @@ from typing import Any
 import arxiv
 import httpx
 
+from backend.integrations.paper_sources.base import PaperSourceSearchResponse
 from backend.schemas import PaperSearchResult
+from backend.services.papers import normalize_identifier
+
+_ARXIV_ID_RE = re.compile(r"(?:arxiv:\s*|arxiv\.org/(?:abs|pdf)/)?(?P<id>\d{4}\.\d{4,5}(?:v\d+)?)", re.IGNORECASE)
+_DOI_PREFIX_RE = re.compile(r"^(?:https?://(?:dx\.)?doi\.org/|doi:\s*)", re.IGNORECASE)
 
 
 @dataclass
 class ArxivRateLimiter:
-    min_interval_seconds: float = 1.0
+    min_interval_seconds: float = 3.0
     monotonic: Callable[[], float] = time.monotonic
     sleep: Callable[[float], None] = time.sleep
     _last_call_at: float | None = None
@@ -49,11 +55,23 @@ class ArxivClient:
         self.arxiv_client = arxiv_client or arxiv.Client()
         self.http_client = http_client or httpx.Client(follow_redirects=True, timeout=30)
 
-    def search(self, query: str, max_results: int = 10) -> list[PaperSearchResult]:
-        max_results = max(1, min(max_results, 50))
-        search = arxiv.Search(query=query, max_results=max_results, sort_by=arxiv.SortCriterion.Relevance)
+    def search(self, query: str, max_results: int = 10, *, mode: str = "auto", offset: int = 0) -> PaperSourceSearchResponse:
+        warnings: list[str] = []
+        max_results = max(1, min(max_results, 25))
+        offset = max(0, offset)
+        query_used, id_list = _arxiv_query(query, mode, warnings)
+        if _is_broad_query(query, mode):
+            warnings.append("Broad arXiv query; refine with title terms, author, year, category, or identifier before paging broadly.")
+        search = arxiv.Search(
+            query="" if id_list else query_used,
+            id_list=id_list,
+            max_results=max_results + offset,
+            sort_by=arxiv.SortCriterion.Relevance,
+        )
         results = self._with_retry(lambda: list(self.arxiv_client.results(search)))
-        return [self._to_search_result(result) for result in results]
+        if offset:
+            results = results[offset:]
+        return PaperSourceSearchResponse(results=[self._to_search_result(result) for result in results[:max_results]], query_used=query_used, warnings=warnings)
 
     def download_pdf(self, pdf_url: str, destination: Path) -> Path:
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -103,3 +121,41 @@ class ArxivClient:
                 "updated": result.updated.isoformat() if result.updated else None,
             },
         )
+
+
+def _arxiv_query(query: str, mode: str, warnings: list[str]) -> tuple[str, list[str] | None]:
+    stripped = query.strip()
+    normalized_mode = mode.lower()
+    if normalized_mode in {"arxiv_id", "identifier"}:
+        arxiv_id = _extract_arxiv_id(stripped)
+        if arxiv_id is not None:
+            return f"id_list:{arxiv_id}", [arxiv_id]
+    if normalized_mode == "auto":
+        arxiv_id = _extract_arxiv_id(stripped)
+        if arxiv_id is not None:
+            return f"id_list:{arxiv_id}", [arxiv_id]
+    if normalized_mode == "doi":
+        doi = _DOI_PREFIX_RE.sub("", stripped).strip().rstrip(".").lower()
+        warnings.append("arXiv DOI search can be incomplete; use OpenAlex DOI search when exact DOI matching is required.")
+        return f'doi:"{doi}"', None
+    if normalized_mode == "title":
+        return f'ti:"{stripped}"', None
+    if normalized_mode == "keyword":
+        return f'all:"{stripped}"', None
+    if normalized_mode == "advanced":
+        return stripped, None
+    return stripped, None
+
+
+def _extract_arxiv_id(value: str) -> str | None:
+    match = _ARXIV_ID_RE.search(value)
+    if match is None:
+        return None
+    return normalize_identifier("arxiv", match.group("id"))
+
+
+def _is_broad_query(query: str, mode: str) -> bool:
+    if mode not in {"auto", "keyword"}:
+        return False
+    terms = [term for term in re.split(r"\W+", query.strip()) if term]
+    return len(terms) <= 2 or len(query.strip()) < 12

@@ -1,13 +1,25 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+
 from sqlalchemy.orm import Session
 
 from backend.db.models import SearchCandidate, SearchSession, Thread
 from backend.db.repositories import SearchRepository
 from backend.db.types import PaperSource, SearchStatus
-from backend.integrations.paper_sources import PaperSourceAdapter
+from backend.integrations.paper_sources import PaperSourceAdapter, PaperSourceSearchResponse
 from backend.schemas import PaperSearchResult
-from backend.services.papers import identifiers_from_search_result, search_papers_by_title, upsert_paper_from_search_result
+from backend.services.papers import identifiers_from_search_result, normalize_title, search_papers_catalog, upsert_paper_from_search_result
+
+
+@dataclass(frozen=True)
+class PaperSearchExecution:
+    search_session: SearchSession
+    source: str
+    mode: str
+    query: str
+    query_used: str
+    warnings: list[str] = field(default_factory=list)
 
 
 class PaperSearchService:
@@ -19,27 +31,37 @@ class PaperSearchService:
         self,
         query: str,
         *,
+        source: str = PaperSource.local.value,
+        mode: str = "auto",
         thread_id: int | None = None,
         run_id: int | None = None,
         max_results: int = 10,
-        source_names: list[str] | None = None,
-    ) -> SearchSession:
+        offset: int = 0,
+    ) -> PaperSearchExecution:
         search_session = SearchRepository(self.session).create_session(
             query,
             thread_id=thread_id,
             run_id=run_id,
             status=SearchStatus.waiting_for_confirmation.value,
-            source_preference=",".join(source_names) if source_names else None,
+            source_preference=f"{source}:{mode}",
         )
-        candidates = self._local_candidates(query, max_results=max_results)
-        for source_name, source in self._selected_sources(source_names).items():
-            candidates.extend(source.search(query, max_results=max_results))
-        for rank, candidate in enumerate(_dedupe_candidates(candidates)[:max_results], start=1):
+        response = self._search_source(query, source=source, mode=mode, max_results=max_results, offset=offset)
+        for rank, candidate in enumerate(_dedupe_candidates(response.results)[:max_results], start=1):
             self._add_candidate(search_session.id, rank, candidate)
         if not search_session.candidates:
             search_session.status = SearchStatus.failed.value
         self.session.flush()
-        return search_session
+        return PaperSearchExecution(
+            search_session=search_session,
+            source=source,
+            mode=mode,
+            query=query,
+            query_used=response.query_used,
+            warnings=response.warnings,
+        )
+
+    def get_session(self, search_session_id: int) -> SearchSession | None:
+        return self.session.get(SearchSession, search_session_id)
 
     def confirm_candidate(
         self,
@@ -61,29 +83,13 @@ class PaperSearchService:
         self.session.flush()
         return search_session
 
-    def _local_candidates(self, query: str, *, max_results: int) -> list[PaperSearchResult]:
-        papers = search_papers_by_title(self.session, query, limit=max_results)
-        return [
-            PaperSearchResult(
-                source=PaperSource.manual_upload.value,
-                source_record_id=f"paper:{paper.id}",
-                title=paper.title,
-                abstract=paper.abstract,
-                authors=list(paper.authors_json or []),
-                year=paper.year,
-                venue=paper.venue,
-                landing_page_url=paper.landing_page_url,
-                pdf_url=paper.best_pdf_url,
-                score=1.0,
-                raw={"paper_id": paper.id, "local": True},
-            )
-            for paper in papers
-        ]
-
-    def _selected_sources(self, source_names: list[str] | None) -> dict[str, PaperSourceAdapter]:
-        if source_names is None:
-            return self.sources
-        return {name: self.sources[name] for name in source_names if name in self.sources}
+    def _search_source(self, query: str, *, source: str, mode: str, max_results: int, offset: int) -> PaperSourceSearchResponse:
+        if source == PaperSource.local.value:
+            return PaperSourceSearchResponse(results=search_papers_catalog(self.session, query, mode=mode, limit=max_results), query_used=f"local:{mode}:{query}")
+        adapter = self.sources.get(source)
+        if adapter is None:
+            raise ValueError(f"Paper source {source!r} is not configured")
+        return adapter.search(query, max_results=max_results, mode=mode, offset=offset)
 
     def _add_candidate(self, search_session_id: int, rank: int, result: PaperSearchResult) -> SearchCandidate:
         identifiers = identifiers_from_search_result(result)
@@ -104,7 +110,7 @@ class PaperSearchService:
             landing_page_url=result.landing_page_url,
             pdf_url=result.pdf_url,
             score=result.score,
-            raw_json=result.raw,
+            raw_json={**result.raw, "venue": result.venue},
         )
 
 
@@ -116,6 +122,7 @@ def _candidate_to_result(candidate: SearchCandidate) -> PaperSearchResult:
         abstract=candidate.abstract,
         authors=list(candidate.authors_json or []),
         year=candidate.year,
+        venue=(candidate.raw_json or {}).get("venue"),
         doi=candidate.doi,
         arxiv_id=candidate.arxiv_id,
         openalex_id=candidate.openalex_id,
@@ -133,7 +140,10 @@ def _dedupe_candidates(candidates: list[PaperSearchResult]) -> list[PaperSearchR
         keys = _candidate_keys(candidate)
         if keys and any(key in seen for key in keys):
             continue
-        seen.update(keys or [("title", candidate.title.strip().lower())])
+        fallback = ("title", normalize_title(candidate.title))
+        if not keys and fallback in seen:
+            continue
+        seen.update(keys or [fallback])
         deduped.append(candidate)
     return deduped
 
@@ -144,4 +154,7 @@ def _candidate_keys(candidate: PaperSearchResult) -> list[tuple[str, str]]:
         keys.append((identifier.identifier_type, identifier.identifier_value))
     if candidate.source_record_id:
         keys.append((candidate.source, candidate.source_record_id))
+    title = normalize_title(candidate.title)
+    if title:
+        keys.append(("title", title))
     return keys

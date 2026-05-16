@@ -37,29 +37,18 @@ def test_post_agent_message_creates_thread_messages_run_and_events(client, sessi
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["status"] == RunStatus.succeeded.value
-    assert payload["message"] == "assistant answer"
-    assert fake_agent.calls[0][0]["messages"][0]["content"] == "Explain this paper"
-    assert fake_agent.calls[0][1].thread_id == payload["thread_id"]
-    assert fake_agent.calls[0][1].run_id == payload["run_id"]
-    assert fake_agent.calls[0][1].model == "test-model"
-    assert fake_agent.calls[0][1].api_key == "secret"
+    assert payload["status"] == RunStatus.running.value
+    assert payload["message"] is None
     run = session.get(AgentRun, payload["run_id"])
     thread = session.get(Thread, payload["thread_id"])
     assert thread.deepagent_thread_id is not None
     assert run.deepagent_thread_id == thread.deepagent_thread_id
-    assert fake_agent.calls[0][2]["configurable"]["thread_id"] == thread.deepagent_thread_id
-    assert fake_agent.calls[0][2]["metadata"]["paper_claw_run_id"] == run.id
-    assert fake_agent.calls[0][3] == ["messages", "updates"]
-    assert fake_agent.calls[0][4] is True
-    assert fake_agent.calls[0][5] == "v2"
-    assert run.status == RunStatus.succeeded.value
+    assert run.status == RunStatus.running.value
     assert run.input_json["has_api_key"] is True
     assert "api_key" not in run.input_json
     messages = session.query(Message).filter(Message.thread_id == payload["thread_id"]).order_by(Message.created_at).all()
-    assert [message.role for message in messages] == [MessageRole.user.value, MessageRole.assistant.value]
-    assert messages[-1].run_id == run.id
-    assert [event.event_type for event in run.events] == ["agent_message_received", "agent_message_completed"]
+    assert [message.role for message in messages] == [MessageRole.user.value]
+    assert [event.event_type for event in run.events] == ["agent_message_received"]
 
 
 def test_post_agent_message_stream_returns_ndjson_events(client, session, monkeypatch):
@@ -74,7 +63,17 @@ def test_post_agent_message_stream_returns_ndjson_events(client, session, monkey
     assert [payload["type"] for payload in payloads] == ["run_started", "agent_chunk", "run_completed"]
     assert payloads[-1]["message"] == "streamed answer"
     run = session.get(AgentRun, payloads[-1]["run_id"])
+    thread = session.get(Thread, payloads[-1]["thread_id"])
     assert run.status == RunStatus.succeeded.value
+    assert fake_agent.calls[0][0]["messages"][0]["content"] == "Stream this"
+    assert fake_agent.calls[0][1].thread_id == thread.id
+    assert fake_agent.calls[0][1].run_id == run.id
+    assert fake_agent.calls[0][1].model == "test-model"
+    assert fake_agent.calls[0][2]["configurable"]["thread_id"] == thread.deepagent_thread_id
+    assert fake_agent.calls[0][2]["metadata"]["paper_claw_run_id"] == run.id
+    assert fake_agent.calls[0][3] == ["messages", "updates"]
+    assert fake_agent.calls[0][4] is True
+    assert fake_agent.calls[0][5] == "v2"
     messages = session.query(Message).filter(Message.thread_id == payloads[-1]["thread_id"]).order_by(Message.created_at).all()
     assert [message.role for message in messages] == [MessageRole.user.value, MessageRole.assistant.value]
 
@@ -157,8 +156,10 @@ def test_post_agent_message_reports_missing_chat_model(client, monkeypatch):
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["status"] == RunStatus.failed.value
-    assert "PAPER_CLAW_CHAT_MODEL" in payload["error"]
+    assert payload["status"] == RunStatus.running.value
+    run_response = client.get(f"/api/runs/{payload['run_id']}")
+    assert run_response.status_code == 200
+    assert run_response.json()["status"] == RunStatus.running.value
 
 
 def test_post_agent_message_failure_marks_run_failed(client, session, monkeypatch):
@@ -168,12 +169,12 @@ def test_post_agent_message_failure_marks_run_failed(client, session, monkeypatc
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["status"] == RunStatus.failed.value
-    assert payload["error"] == "model failed"
+    assert payload["status"] == RunStatus.running.value
+    assert payload["error"] is None
     run = session.get(AgentRun, payload["run_id"])
-    assert run.status == RunStatus.failed.value
-    assert run.error_message == "model failed"
-    assert run.events[-1].event_type == "agent_message_failed"
+    assert run.status == RunStatus.running.value
+    assert run.error_message is None
+    assert run.events[-1].event_type == "agent_message_received"
 
 
 def test_run_events_endpoint_filters_after_sequence(client, session):

@@ -2,7 +2,7 @@ from backend.tools.paper_acquisition import acquire_paper_artifacts, register_lo
 from backend.tools.paper_parsing import parse_paper, process_paper_document
 from backend.tools.paper_qa import embed_paper_chunks, retrieve_paper_evidence
 from backend.tools.paper_reports import generate_paper_report
-from backend.tools.paper_search import confirm_paper_candidate, get_paper, search_papers
+from backend.tools.paper_search import confirm_paper_candidate, get_paper, recommend_paper_candidates, search_papers
 from backend.tools.paper_status import get_active_paper, get_paper_pipeline_status, list_paper_artifacts, list_paper_reports, search_local_papers, set_thread_focus
 
 MAIN_AGENT_TOOLS = [
@@ -17,9 +17,8 @@ MAIN_AGENT_TOOLS = [
 
 DISCOVERY_AGENT_TOOLS = [
     search_papers,
-    confirm_paper_candidate,
+    recommend_paper_candidates,
     get_paper,
-    search_local_papers,
 ]
 
 INGESTION_AGENT_TOOLS = [
@@ -64,6 +63,7 @@ __all__ = [
     "parse_paper",
     "process_paper_document",
     "register_local_paper_pdf",
+    "recommend_paper_candidates",
     "register_local_paper_source",
     "retrieve_paper_evidence",
     "search_local_papers",
