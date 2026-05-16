@@ -6,6 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import arxiv
 import httpx
@@ -43,6 +44,7 @@ class ArxivClient:
         max_retries: int = 3,
         backoff_base_seconds: float = 1.0,
         backoff_max_seconds: float = 30.0,
+        timeout_seconds: float = 30.0,
         sleep: Callable[[float], None] = time.sleep,
         arxiv_client: arxiv.Client | None = None,
         http_client: httpx.Client | None = None,
@@ -53,7 +55,7 @@ class ArxivClient:
         self.backoff_max_seconds = backoff_max_seconds
         self.sleep = sleep
         self.arxiv_client = arxiv_client or arxiv.Client()
-        self.http_client = http_client or httpx.Client(follow_redirects=True, timeout=30)
+        self.http_client = http_client or httpx.Client(follow_redirects=True, timeout=timeout_seconds)
 
     def search(self, query: str, max_results: int = 10, *, mode: str = "auto", offset: int = 0) -> PaperSourceSearchResponse:
         warnings: list[str] = []
@@ -74,10 +76,17 @@ class ArxivClient:
         return PaperSourceSearchResponse(results=[self._to_search_result(result) for result in results[:max_results]], query_used=query_used, warnings=warnings)
 
     def download_pdf(self, pdf_url: str, destination: Path) -> Path:
+        return self._download(pdf_url, destination)
+
+    def download_source(self, arxiv_id: str, destination: Path) -> Path:
+        normalized_id = normalize_arxiv_id(arxiv_id)
+        return self._download(f"https://arxiv.org/src/{normalized_id}", destination)
+
+    def _download(self, url: str, destination: Path) -> Path:
         destination.parent.mkdir(parents=True, exist_ok=True)
 
         def fetch() -> httpx.Response:
-            response = self.http_client.get(pdf_url)
+            response = self.http_client.get(url)
             response.raise_for_status()
             return response
 
@@ -121,6 +130,19 @@ class ArxivClient:
                 "updated": result.updated.isoformat() if result.updated else None,
             },
         )
+
+
+def normalize_arxiv_id(value: str) -> str:
+    arxiv_id = _extract_arxiv_id(value)
+    if arxiv_id is not None:
+        return arxiv_id
+    parsed = urlparse(value.strip())
+    candidate = parsed.path.strip("/").split("/")[-1] if parsed.scheme and parsed.netloc else value.strip()
+    candidate = candidate.removesuffix(".pdf")
+    normalized = normalize_identifier("arxiv", candidate)
+    if not normalized or not re.fullmatch(r"\d{4}\.\d{4,5}", normalized):
+        raise ValueError(f"Invalid arXiv id: {value}")
+    return normalized
 
 
 def _arxiv_query(query: str, mode: str, warnings: list[str]) -> tuple[str, list[str] | None]:

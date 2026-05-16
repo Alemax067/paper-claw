@@ -60,7 +60,7 @@ def search_local_papers(query: str, mode: str = "auto", limit: int = 10) -> dict
 
 
 @tool
-def get_paper_pipeline_status(paper_id: int | None = None) -> dict:
+def get_paper_pipeline_status(paper_id: int | None = None, include_metadata: bool = False) -> dict:
     """Return compact ingestion, processing, embedding, and report status for a paper."""
     with tool_session() as session:
         resolved_paper_id = resolve_active_paper_id(session, paper_id)
@@ -69,7 +69,7 @@ def get_paper_pipeline_status(paper_id: int | None = None) -> dict:
             return {"error": f"Paper {resolved_paper_id} not found"}
         processed = _latest_processed_document(session, resolved_paper_id)
         return {
-            "paper": _paper_summary(paper),
+            "paper": _paper_metadata(paper) if include_metadata else _paper_summary(paper),
             "artifacts": _artifact_status(session, resolved_paper_id),
             "latest_parse_job": _latest_parse_job_status(session, resolved_paper_id),
             "processed_document": _processed_status(session, processed),
@@ -139,6 +139,34 @@ def list_paper_reports(paper_id: int | None = None, limit: int = 10) -> dict:
 
 def _paper_summary(paper: Paper) -> dict:
     return {"id": paper.id, "title": paper.title, "year": paper.year, "venue": paper.venue, "authors": list(paper.authors_json or [])}
+
+
+def _paper_metadata(paper: Paper) -> dict:
+    return {
+        **_paper_summary(paper),
+        "abstract": paper.abstract,
+        "best_pdf_url": paper.best_pdf_url,
+        "landing_page_url": paper.landing_page_url,
+        "metadata": dict(paper.metadata_json or {}),
+        "identifiers": [
+            {
+                "type": identifier.identifier_type,
+                "value": identifier.identifier_value,
+                "is_primary": identifier.is_primary,
+            }
+            for identifier in paper.identifiers
+        ],
+        "source_records": [
+            {
+                "source": record.source,
+                "source_record_id": record.source_record_id,
+                "source_url": record.source_url,
+                "is_primary": record.is_primary,
+                "raw": dict(record.raw_json or {}),
+            }
+            for record in paper.source_records
+        ],
+    }
 
 
 def _artifact_status(session, paper_id: int) -> dict:

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy.orm import sessionmaker
 
-from backend.db.models import AgentRun, AgentRunEvent, Paper, Thread
+from backend.db.models import AgentRun, AgentRunEvent, Paper, PaperIdentifier, PaperSourceRecord, Thread
 from backend.db.repositories import ParsingRepository
 from backend.db.types import ProcessedDocumentStatus, RunStatus, WorkflowName
 from backend.schemas import PaperClawContext, ResolvedProviderConfig
@@ -11,6 +13,7 @@ from backend.tools.context import set_tool_session_factory, tool_runtime_context
 from backend.tools.paper_qa import retrieve_paper_evidence
 from backend.tools.paper_reports import generate_paper_report
 from backend.tools.paper_search import get_paper, recommend_paper_candidates, search_papers
+from backend.tools.paper_status import get_paper_pipeline_status
 
 
 def test_expected_tool_names_exist():
@@ -29,6 +32,9 @@ def test_expected_tool_names_exist():
         "get_paper_pipeline_status",
         "list_paper_artifacts",
         "acquire_paper_artifacts",
+        "download_arxiv_paper_artifacts",
+        "download_paper_pdf_from_url",
+        "mark_paper_artifact_upload_required",
         "register_local_paper_pdf",
         "register_local_paper_source",
         "parse_paper",
@@ -36,6 +42,32 @@ def test_expected_tool_names_exist():
     }
     assert {tool.name for tool in EVIDENCE_AGENT_TOOLS} == {"get_paper_pipeline_status", "retrieve_paper_evidence"}
     assert {tool.name for tool in REPORT_AGENT_TOOLS} == {"get_paper_pipeline_status", "list_paper_reports", "generate_paper_report"}
+
+
+def test_get_paper_pipeline_status_can_include_full_metadata(session, engine):
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    paper = Paper(title="Metadata Paper", best_pdf_url="https://example.com/paper.pdf", landing_page_url="https://arxiv.org/abs/2401.00001", metadata_json={"source": "arxiv"})
+    session.add(paper)
+    session.flush()
+    session.add_all(
+        [
+            PaperIdentifier(paper_id=paper.id, identifier_type="arxiv", identifier_value="2401.00001", is_primary=True, created_at=datetime.now().astimezone()),
+            PaperSourceRecord(paper_id=paper.id, source="arxiv", source_record_id="2401.00001v1", source_url="https://arxiv.org/abs/2401.00001v1", is_primary=True, raw_json={"primary_category": "cs.AI"}),
+        ]
+    )
+    session.commit()
+    set_tool_session_factory(factory)
+    try:
+        compact = get_paper_pipeline_status.invoke({"paper_id": paper.id})
+        full = get_paper_pipeline_status.invoke({"paper_id": paper.id, "include_metadata": True})
+    finally:
+        set_tool_session_factory(None)
+
+    assert "identifiers" not in compact["paper"]
+    assert full["paper"]["best_pdf_url"] == "https://example.com/paper.pdf"
+    assert full["paper"]["identifiers"] == [{"type": "arxiv", "value": "2401.00001", "is_primary": True}]
+    assert full["paper"]["source_records"][0]["raw"] == {"primary_category": "cs.AI"}
+
 
 
 def test_search_papers_returns_rich_local_candidate_payload(session, engine):

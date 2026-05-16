@@ -53,7 +53,8 @@ def test_arxiv_search_and_download_share_limiter(tmp_path):
     )
     fake_arxiv_client = SimpleNamespace(results=lambda search: [result])
     fake_response = SimpleNamespace(content=b"pdf", raise_for_status=lambda: None)
-    fake_http_client = SimpleNamespace(get=lambda url: fake_response)
+    requested_urls = []
+    fake_http_client = SimpleNamespace(get=lambda url: requested_urls.append(url) or fake_response)
     client = ArxivClient(
         limiter=limiter,
         sleep=clock.sleep,
@@ -63,8 +64,11 @@ def test_arxiv_search_and_download_share_limiter(tmp_path):
 
     client.search("rag")
     client.download_pdf("https://arxiv.org/pdf/2401.00001", tmp_path / "paper.pdf")
+    client.download_source("2401.00001v2", tmp_path / "source.tar.gz")
 
-    assert clock.sleeps == [1.0]
+    assert clock.sleeps == [1.0, 1.0]
+    assert requested_urls[-1] == "https://arxiv.org/src/2401.00001"
+    assert "/e-print/" not in requested_urls[-1]
 
 
 def test_arxiv_retry_uses_exponential_backoff():

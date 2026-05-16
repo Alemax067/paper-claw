@@ -26,6 +26,7 @@ def _paper_source_adapters(settings: Settings) -> dict[str, PaperSourceAdapter]:
             max_retries=settings.arxiv_max_retries,
             backoff_base_seconds=settings.arxiv_backoff_base_seconds,
             backoff_max_seconds=settings.arxiv_backoff_max_seconds,
+            timeout_seconds=settings.arxiv_timeout_seconds,
         ),
         "openalex": OpenAlexClient(
             api_key=settings.openalex_api_key,

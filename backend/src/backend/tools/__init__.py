@@ -1,4 +1,11 @@
-from backend.tools.paper_acquisition import acquire_paper_artifacts, register_local_paper_pdf, register_local_paper_source
+from backend.tools.paper_acquisition import (
+    acquire_paper_artifacts,
+    download_arxiv_paper_artifacts,
+    download_paper_pdf_from_url,
+    mark_paper_artifact_upload_required,
+    register_local_paper_pdf,
+    register_local_paper_source,
+)
 from backend.tools.paper_parsing import parse_paper, process_paper_document
 from backend.tools.paper_qa import embed_paper_chunks, retrieve_paper_evidence
 from backend.tools.paper_reports import generate_paper_report
@@ -25,6 +32,9 @@ INGESTION_AGENT_TOOLS = [
     get_paper_pipeline_status,
     list_paper_artifacts,
     acquire_paper_artifacts,
+    download_arxiv_paper_artifacts,
+    download_paper_pdf_from_url,
+    mark_paper_artifact_upload_required,
     register_local_paper_pdf,
     register_local_paper_source,
     parse_paper,
@@ -53,6 +63,8 @@ __all__ = [
     "REPORT_AGENT_TOOLS",
     "acquire_paper_artifacts",
     "confirm_paper_candidate",
+    "download_arxiv_paper_artifacts",
+    "download_paper_pdf_from_url",
     "embed_paper_chunks",
     "generate_paper_report",
     "get_active_paper",
@@ -60,6 +72,7 @@ __all__ = [
     "get_paper_pipeline_status",
     "list_paper_artifacts",
     "list_paper_reports",
+    "mark_paper_artifact_upload_required",
     "parse_paper",
     "process_paper_document",
     "register_local_paper_pdf",

@@ -39,6 +39,9 @@ def test_subagents_have_explicit_isolated_tools():
         "get_paper_pipeline_status",
         "list_paper_artifacts",
         "acquire_paper_artifacts",
+        "download_arxiv_paper_artifacts",
+        "download_paper_pdf_from_url",
+        "mark_paper_artifact_upload_required",
         "register_local_paper_pdf",
         "register_local_paper_source",
         "parse_paper",
@@ -57,6 +60,16 @@ def test_discovery_prompt_returns_candidates_for_deterministic_confirmation():
     assert "call recommend_paper_candidates exactly once" in subagent["system_prompt"]
     assert "candidate_found_unconfirmed" in subagent["system_prompt"]
     assert "interrupt_on" not in subagent
+
+
+def test_ingestion_prompt_prepares_artifacts_from_metadata():
+    subagent = create_paper_claw_subagents()[1]
+
+    assert "get_paper_pipeline_status(include_metadata=True)" in subagent["system_prompt"]
+    assert "extract the arXiv id" in subagent["system_prompt"]
+    assert "https://arxiv.org/src/{id}" in subagent["system_prompt"]
+    assert "download_paper_pdf_from_url" in subagent["system_prompt"]
+    assert "waiting_for_user_upload" in subagent["system_prompt"]
 
 
 def test_agent_factory_constructs_without_external_model_call():

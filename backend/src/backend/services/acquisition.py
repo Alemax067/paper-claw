@@ -1,17 +1,23 @@
 from __future__ import annotations
 
+import ipaddress
+import socket
 from collections.abc import Callable
 from pathlib import Path
+from urllib.parse import urlparse
 
+import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from backend.db.models import AcquisitionJob, Artifact, Paper, PaperArtifact
 from backend.db.repositories import ArtifactRepository
 from backend.db.types import AcquisitionSource, ArtifactKind, ArtifactStatus, PaperArtifactRole, RunStatus
+from backend.integrations.paper_sources.arxiv import ArxivClient, normalize_arxiv_id
 from backend.services.storage import ArtifactStorageService
 
 Downloader = Callable[[str, Path], Path]
+MAX_PDF_DOWNLOAD_BYTES = 100 * 1024 * 1024
 
 
 class AcquisitionService:
@@ -62,11 +68,13 @@ class AcquisitionService:
             result_json={"message": "Upload a TeX source archive or PDF for this paper."},
         )
 
-    def acquire_pdf_from_url(self, paper_id: int, pdf_url: str, downloader: Downloader) -> AcquisitionJob:
+    def acquire_pdf_from_url(self, paper_id: int, pdf_url: str, downloader: Downloader, *, thread_id: int | None = None, run_id: int | None = None) -> AcquisitionJob:
         paper = self._get_paper(paper_id)
         job = ArtifactRepository(self.session).create_acquisition_job(
             paper_id,
             _source_from_url(pdf_url),
+            thread_id=thread_id,
+            run_id=run_id,
             status=RunStatus.running.value,
             input_json={"pdf_url": pdf_url},
         )
@@ -76,12 +84,73 @@ class AcquisitionService:
             artifact = self.storage_service.register_local_pdf(paper.id, downloaded_path, original_filename="original.pdf")
             paper.best_pdf_url = paper.best_pdf_url or pdf_url
             job.status = RunStatus.succeeded.value
-            job.result_json = {"artifact_id": artifact.id, "storage_uri": artifact.storage_uri}
+            job.result_json = {"artifact_id": artifact.id, "storage_uri": artifact.storage_uri, "next_step": "parse_pdf"}
         except Exception as exc:
             job.status = RunStatus.failed.value
             job.error_message = str(exc)
         self.session.flush()
         return job
+
+    def download_pdf_from_url(self, paper_id: int, pdf_url: str, *, thread_id: int | None = None, run_id: int | None = None) -> AcquisitionJob:
+        return self.acquire_pdf_from_url(paper_id, pdf_url, safe_pdf_downloader, thread_id=thread_id, run_id=run_id)
+
+    def download_arxiv_artifacts(self, paper_id: int, arxiv_id: str, client: ArxivClient, *, thread_id: int | None = None, run_id: int | None = None) -> AcquisitionJob:
+        paper = self._get_paper(paper_id)
+        normalized_id = normalize_arxiv_id(arxiv_id)
+        job = ArtifactRepository(self.session).create_acquisition_job(
+            paper_id,
+            AcquisitionSource.arxiv.value,
+            thread_id=thread_id,
+            run_id=run_id,
+            status=RunStatus.running.value,
+            input_json={"arxiv_id": normalized_id},
+        )
+        source_result = None
+        pdf_result = None
+        source_error = None
+        pdf_error = None
+        try:
+            source_path = client.download_source(normalized_id, self.storage_service.storage.paper_file_path(paper.id, f"source/{normalized_id}.tar.gz"))
+            source_artifact = self.storage_service.register_source_artifact(paper.id, source_path, original_filename=f"{normalized_id}.tar.gz")
+            source_result = {"artifact_id": source_artifact.id, "storage_uri": source_artifact.storage_uri}
+        except Exception as exc:
+            source_error = str(exc)
+        pdf_url = f"https://arxiv.org/pdf/{normalized_id}"
+        try:
+            pdf_path = client.download_pdf(pdf_url, self.storage_service.storage.paper_file_path(paper.id, "original.pdf"))
+            pdf_artifact = self.storage_service.register_local_pdf(paper.id, pdf_path, original_filename="original.pdf")
+            paper.best_pdf_url = paper.best_pdf_url or pdf_url
+            pdf_result = {"artifact_id": pdf_artifact.id, "storage_uri": pdf_artifact.storage_uri}
+        except Exception as exc:
+            pdf_error = str(exc)
+        if source_result is not None:
+            job.status = RunStatus.succeeded.value
+            job.result_json = {"source": source_result, "pdf": pdf_result, "pdf_error": pdf_error, "next_step": "parse_tex_source"}
+        elif pdf_result is not None:
+            job.status = RunStatus.partial.value
+            job.result_json = {"source_error": source_error, "pdf": pdf_result, "next_step": "parse_pdf"}
+        else:
+            job.status = RunStatus.waiting_for_user.value
+            job.error_message = source_error or pdf_error
+            job.result_json = {
+                "source_error": source_error,
+                "pdf_error": pdf_error,
+                "message": "Upload a TeX source archive or PDF for this paper.",
+            }
+        self.session.flush()
+        return job
+
+    def mark_waiting_for_upload(self, paper_id: int, reason: str, *, thread_id: int | None = None, run_id: int | None = None) -> AcquisitionJob:
+        self._get_paper(paper_id)
+        return ArtifactRepository(self.session).create_acquisition_job(
+            paper_id,
+            AcquisitionSource.manual_upload.value,
+            thread_id=thread_id,
+            run_id=run_id,
+            status=RunStatus.waiting_for_user.value,
+            input_json={"required": ["pdf", "source_archive"], "reason": reason},
+            result_json={"message": "Upload a TeX source archive or PDF for this paper."},
+        )
 
     def _get_paper(self, paper_id: int) -> Paper:
         paper = self.session.get(Paper, paper_id)
@@ -101,6 +170,56 @@ class AcquisitionService:
             )
             .order_by(PaperArtifact.is_primary.desc(), Artifact.created_at.desc())
         )
+
+
+def safe_pdf_downloader(url: str, destination: Path) -> Path:
+    _validate_public_https_url(url)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with httpx.Client(follow_redirects=False, timeout=30) as client:
+        current_url = url
+        for _ in range(6):
+            _validate_public_https_url(current_url)
+            with client.stream("GET", current_url) as response:
+                if response.status_code in {301, 302, 303, 307, 308}:
+                    location = response.headers.get("location")
+                    if not location:
+                        raise ValueError("Redirect response did not include a Location header")
+                    current_url = str(response.url.join(location))
+                    continue
+                response.raise_for_status()
+                content_type = response.headers.get("content-type", "").lower()
+                total = 0
+                prefix = b""
+                with destination.open("wb") as handle:
+                    for chunk in response.iter_bytes():
+                        if not chunk:
+                            continue
+                        total += len(chunk)
+                        if total > MAX_PDF_DOWNLOAD_BYTES:
+                            raise ValueError("PDF download exceeds the maximum allowed size")
+                        if len(prefix) < 5:
+                            prefix += chunk[: 5 - len(prefix)]
+                        handle.write(chunk)
+                if "application/pdf" not in content_type and not prefix.startswith(b"%PDF-"):
+                    destination.unlink(missing_ok=True)
+                    raise ValueError("Downloaded content is not a PDF")
+                return destination
+        raise ValueError("Too many redirects while downloading PDF")
+
+
+def _validate_public_https_url(url: str) -> None:
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ValueError("Only public https PDF URLs are allowed")
+    try:
+        ipaddress.ip_address(parsed.hostname)
+        hosts = [parsed.hostname]
+    except ValueError:
+        hosts = [result[4][0] for result in socket.getaddrinfo(parsed.hostname, None, type=socket.SOCK_STREAM)]
+    for host in hosts:
+        address = ipaddress.ip_address(host)
+        if not address.is_global:
+            raise ValueError("PDF URL host must resolve to a public address")
 
 
 def _source_from_url(url: str) -> str:

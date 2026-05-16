@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -140,4 +141,80 @@ def test_acquire_pdf_from_url_uses_downloader_and_registers_pdf(session, tmp_pat
 
     assert job.status == RunStatus.succeeded.value
     assert job.result_json["storage_uri"] == f"local://papers/{paper.id}/original.pdf"
+    assert job.result_json["next_step"] == "parse_pdf"
     assert session.query(PaperArtifact).one().role == PaperArtifactRole.pdf.value
+
+
+def test_download_arxiv_artifacts_registers_source_and_pdf(session, tmp_path):
+    paper = Paper(title="arXiv paper")
+    session.add(paper)
+    session.commit()
+    storage_service = make_storage_service(session, tmp_path)
+    calls = []
+
+    def download_source(arxiv_id: str, destination: Path) -> Path:
+        calls.append(("source", arxiv_id))
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"source")
+        return destination
+
+    def download_pdf(pdf_url: str, destination: Path) -> Path:
+        calls.append(("pdf", pdf_url))
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"%PDF-fixture")
+        return destination
+
+    client = SimpleNamespace(download_source=download_source, download_pdf=download_pdf)
+
+    job = AcquisitionService(session, storage_service).download_arxiv_artifacts(paper.id, "https://arxiv.org/abs/2401.00001v2", client)
+
+    assert job.status == RunStatus.succeeded.value
+    assert job.result_json["next_step"] == "parse_tex_source"
+    assert calls == [("source", "2401.00001"), ("pdf", "https://arxiv.org/pdf/2401.00001")]
+    assert {link.role for link in session.query(PaperArtifact).all()} == {PaperArtifactRole.source.value, PaperArtifactRole.pdf.value}
+
+
+def test_download_arxiv_artifacts_falls_back_to_pdf_when_source_fails(session, tmp_path):
+    paper = Paper(title="arXiv PDF only")
+    session.add(paper)
+    session.commit()
+    storage_service = make_storage_service(session, tmp_path)
+
+    def download_source(_arxiv_id: str, _destination: Path) -> Path:
+        raise RuntimeError("no source")
+
+    def download_pdf(_pdf_url: str, destination: Path) -> Path:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"%PDF-fixture")
+        return destination
+
+    client = SimpleNamespace(download_source=download_source, download_pdf=download_pdf)
+
+    job = AcquisitionService(session, storage_service).download_arxiv_artifacts(paper.id, "2401.00001", client)
+
+    assert job.status == RunStatus.partial.value
+    assert job.result_json["next_step"] == "parse_pdf"
+    assert job.result_json["source_error"] == "no source"
+    assert session.query(PaperArtifact).one().role == PaperArtifactRole.pdf.value
+
+
+def test_mark_waiting_for_upload_records_reason(session, tmp_path):
+    paper = Paper(title="Needs manual artifact")
+    session.add(paper)
+    session.commit()
+
+    job = AcquisitionService(session, make_storage_service(session, tmp_path)).mark_waiting_for_upload(paper.id, "no download hints")
+
+    assert job.status == RunStatus.waiting_for_user.value
+    assert job.input_json["reason"] == "no download hints"
+
+
+def test_safe_pdf_download_rejects_non_https_url(session, tmp_path):
+    paper = Paper(title="Unsafe URL")
+    session.add(paper)
+    session.commit()
+
+    job = AcquisitionService(session, make_storage_service(session, tmp_path)).download_pdf_from_url(paper.id, "http://example.com/paper.pdf")
+
+    assert job.status == RunStatus.failed.value
+    assert "Only public https" in job.error_message
