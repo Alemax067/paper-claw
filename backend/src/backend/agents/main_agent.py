@@ -15,7 +15,7 @@ from backend.agents.model import paper_claw_model_middleware
 from backend.agents.prompts import PAPER_CLAW_SYSTEM_PROMPT
 from backend.agents.subagents import create_paper_claw_subagents
 from backend.agents.tool_events import paper_claw_tool_event_middleware
-from backend.tools import PAPER_CLAW_TOOLS
+from backend.tools import MAIN_AGENT_TOOLS
 
 
 def create_paper_claw_agent(
@@ -34,7 +34,7 @@ def create_paper_claw_agent(
     )
     return create_deep_agent(
         model=runtime_model,
-        tools=PAPER_CLAW_TOOLS,
+        tools=MAIN_AGENT_TOOLS,
         system_prompt=PAPER_CLAW_SYSTEM_PROMPT,
         middleware=[paper_claw_tool_event_middleware, paper_claw_model_middleware],
         subagents=create_paper_claw_subagents(),

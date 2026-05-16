@@ -100,6 +100,10 @@ function eventLabel(event: RunEventRead): string {
       return 'Response failed';
     case 'agent_stream_update':
       return 'Agent update';
+    case 'agent_interrupt_requested':
+      return 'Waiting for user decision';
+    case 'agent_resume_requested':
+      return 'Run resume requested';
     case 'agent_tool_call_started':
       return `Tool started${toolName(event)}`;
     case 'agent_tool_call_completed':
@@ -129,6 +133,12 @@ function eventDetail(event: RunEventRead): string | null {
   }
   if (typeof payload.decision === 'string') {
     return payload.decision;
+  }
+  if (Array.isArray(payload.action_requests)) {
+    return `${payload.action_requests.length} action${payload.action_requests.length === 1 ? '' : 's'}`;
+  }
+  if (Array.isArray(payload.decisions)) {
+    return `${payload.decisions.length} decision${payload.decisions.length === 1 ? '' : 's'}`;
   }
   if (typeof payload.query_text === 'string') {
     return payload.query_text;

@@ -14,5 +14,8 @@ class OpenAICompatibleEmbeddingAdapter:
 
     def embed_texts(self, provider: ResolvedProviderConfig, texts: list[str]) -> list[list[float]]:
         client = self.client or OpenAI(api_key=provider.api_key or resolve_api_key(provider.api_key_ref), base_url=provider.base_url)
-        response = client.embeddings.create(model=provider.model, input=texts, timeout=provider.settings.get("timeout"))
+        kwargs = {"model": provider.model, "input": texts, "timeout": provider.settings.get("timeout")}
+        if provider.settings.get("dimension") is not None:
+            kwargs["dimensions"] = provider.settings["dimension"]
+        response = client.embeddings.create(**kwargs)
         return [list(item.embedding) for item in response.data]

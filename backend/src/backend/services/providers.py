@@ -70,9 +70,13 @@ def embedding_provider_from_settings(settings: Settings | None = None) -> Resolv
     settings = settings or get_settings()
     if not settings.embedding_model or not settings.embedding_model.strip():
         raise ProviderResolutionError("embedding_model_missing", "PAPER_CLAW_EMBEDDING_MODEL is not set.")
-    provider_settings: dict[str, object] = {"timeout": settings.embedding_timeout_seconds, "max_retries": settings.embedding_max_retries}
-    if settings.embedding_dimension is not None:
-        provider_settings["dimension"] = settings.embedding_dimension
+    provider_settings: dict[str, object] = {
+        "timeout": settings.embedding_timeout_seconds,
+        "max_retries": settings.embedding_max_retries,
+        "dimension": settings.embedding_dimension,
+        "max_context_tokens": settings.embedding_max_context_tokens,
+        "tokenizer_encoding": settings.tokenizer_encoding,
+    }
     return ResolvedProviderConfig(
         id=0,
         name="settings-embedding",

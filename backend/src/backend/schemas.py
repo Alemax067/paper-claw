@@ -269,8 +269,14 @@ class RejectSearchSessionRequest(BaseModel):
     reason: str | None = None
 
 
+class RunDecision(BaseModel):
+    type: Literal["approve", "edit", "reject", "respond"]
+    args: dict[str, Any] | None = None
+
+
 class ApprovalRequest(BaseModel):
-    decision: Literal["approve", "reject", "revise", "cancel"]
+    decisions: list[RunDecision] = Field(default_factory=list)
+    decision: Literal["approve", "reject", "revise", "cancel"] | None = None
     comment: str | None = None
 
 

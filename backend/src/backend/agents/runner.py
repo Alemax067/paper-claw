@@ -4,9 +4,11 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+import traceback
 from uuid import uuid4
 
 from langchain_core.rate_limiters import InMemoryRateLimiter
+from langgraph.types import Command
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -16,8 +18,9 @@ from backend.api.serializers import run_event_read, run_read
 from backend.db.models import AgentRun, AgentRunEvent, Paper, Thread
 from backend.db.repositories import AgentRunRepository, ThreadRepository
 from backend.db.types import EventLevel, MessageRole, MessageSource, RunStatus, WorkflowName
-from backend.schemas import AgentMessageRequest, AgentMessageResponse, AgentStreamEvent, RunEventRead, RunRead
+from backend.schemas import AgentMessageRequest, AgentMessageResponse, AgentStreamEvent, ApprovalRequest, RunEventRead, RunRead
 from backend.settings import Settings, get_settings
+from backend.tools.context import tool_runtime_context
 
 STREAM_MODES = ["messages", "updates"]
 
@@ -60,7 +63,66 @@ def stream_agent_message(session: Session, request: AgentMessageRequest) -> Iter
         status=RunStatus.running.value,
         payload={"thread_id": prepared.thread_id},
     )
+    yield from _stream_agent_graph(session, prepared, request, {"messages": [{"role": "user", "content": request.message}]})
 
+
+def resume_agent_run(session: Session, run_id: int, request: ApprovalRequest) -> RunRead:
+    if request.decision == "cancel":
+        return cancel_run(session, run_id)
+    events = list(stream_agent_run_resume(session, run_id, request))
+    terminal = next((event for event in reversed(events) if event.type in {"run_completed", "run_failed", "run_cancelled", "run_waiting_for_user"}), None)
+    if terminal is None:
+        raise RuntimeError("Agent resume produced no terminal event")
+    run = session.get_one(AgentRun, run_id)
+    return run_read(run)
+
+
+def stream_agent_run_resume(session: Session, run_id: int, request: ApprovalRequest) -> Iterator[AgentStreamEvent]:
+    prepared, message_request = prepare_agent_run_resume(session, run_id, request)
+    yield AgentStreamEvent(
+        type="run_resumed",
+        thread_id=prepared.thread_id,
+        run_id=prepared.run_id,
+        status=RunStatus.running.value,
+        payload={"thread_id": prepared.thread_id},
+    )
+    yield from _stream_agent_graph(session, prepared, message_request, Command(resume={"decisions": _resume_decisions(request)}))
+
+
+def prepare_agent_run_resume(session: Session, run_id: int, request: ApprovalRequest) -> tuple[PreparedAgentRun, AgentMessageRequest]:
+    runs = AgentRunRepository(session)
+    run = session.get(AgentRun, run_id)
+    if run is None:
+        raise ValueError("Run not found")
+    if run.status != RunStatus.waiting_for_user.value:
+        raise ValueError("Run is not waiting for user input")
+    thread = session.get(Thread, run.thread_id) if run.thread_id is not None else None
+    if thread is None:
+        raise ValueError("Run thread not found")
+    input_json = dict(run.input_json or {})
+    input_json.pop("has_api_key", None)
+    message_request = AgentMessageRequest.model_validate({"message": input_json.get("message") or "", **input_json})
+    active_paper_id = thread.current_focus_paper_id
+    if input_json.get("active_paper_id") is not None:
+        active_paper_id = int(input_json["active_paper_id"])
+    run.status = RunStatus.running.value
+    run.finished_at = None
+    run.error_message = None
+    runs.append_event(run.id, "agent_resume_requested", payload_json={"decisions": _resume_decisions(request), "comment": request.comment})
+    session.commit()
+    return (
+        PreparedAgentRun(
+            thread_id=thread.id,
+            run_id=run.id,
+            deepagent_thread_id=run.deepagent_thread_id or thread.deepagent_thread_id or "",
+            active_paper_id=active_paper_id,
+            active_paper_system_info=_active_paper_system_info(session, active_paper_id),
+        ),
+        message_request,
+    )
+
+
+def _stream_agent_graph(session: Session, prepared: PreparedAgentRun, request: AgentMessageRequest, graph_input: Any) -> Iterator[AgentStreamEvent]:
     runs = AgentRunRepository(session)
     message_parts: list[str] = []
     last_message_text: str | None = None
@@ -69,27 +131,53 @@ def stream_agent_message(session: Session, request: AgentMessageRequest) -> Iter
     try:
         agent = create_paper_claw_agent()
         context = _agent_context(prepared, request)
-        for chunk in agent.stream(
-            {"messages": [{"role": "user", "content": request.message}]},
-            config={
-                "configurable": {"thread_id": prepared.deepagent_thread_id},
-                "metadata": {
-                    "assistant_id": "paper-claw",
-                    "paper_claw_thread_id": prepared.thread_id,
-                    "paper_claw_run_id": prepared.run_id,
-                },
-            },
-            context=context,
-            stream_mode=STREAM_MODES,
-            subgraphs=True,
-            version="v2",
-        ):
+        with tool_runtime_context(context):
+            chunks = iter(
+                agent.stream(
+                    graph_input,
+                    config={
+                        "configurable": {"thread_id": prepared.deepagent_thread_id},
+                        "metadata": {
+                            "assistant_id": "paper-claw",
+                            "paper_claw_thread_id": prepared.thread_id,
+                            "paper_claw_run_id": prepared.run_id,
+                        },
+                    },
+                    context=context,
+                    stream_mode=STREAM_MODES,
+                    subgraphs=True,
+                    version="v2",
+                )
+            )
+        while True:
+            with tool_runtime_context(context):
+                try:
+                    chunk = next(chunks)
+                except StopIteration:
+                    break
             if _run_is_cancelled(session, prepared.run_id):
                 yield _run_cancelled_event(session, prepared)
                 return
             normalized = _normalize_stream_chunk(chunk)
             if normalized["mode"] not in STREAM_MODES:
                 continue
+            interrupt_payload = _interrupt_payload(normalized)
+            if interrupt_payload is not None:
+                event = runs.append_event(prepared.run_id, "agent_interrupt_requested", payload_json=interrupt_payload)
+                run = session.get_one(AgentRun, prepared.run_id)
+                run.status = RunStatus.waiting_for_user.value
+                run.output_json = {"interrupt": interrupt_payload, "latest_chunks": _json_safe(latest_chunks)}
+                session.commit()
+                yield AgentStreamEvent(
+                    type="run_waiting_for_user",
+                    thread_id=prepared.thread_id,
+                    run_id=prepared.run_id,
+                    sequence=event.sequence,
+                    event_type=event.event_type,
+                    status=RunStatus.waiting_for_user.value,
+                    payload=interrupt_payload,
+                )
+                return
             text = _stream_message_text(normalized)
             if text:
                 message_parts.append(text)
@@ -155,16 +243,17 @@ def stream_agent_message(session: Session, request: AgentMessageRequest) -> Iter
         )
     except Exception as exc:
         session.rollback()
+        error_payload = _exception_payload(exc)
         run = session.get(AgentRun, prepared.run_id)
         if run is not None:
             run.status = RunStatus.failed.value
-            run.error_message = str(exc)
+            run.error_message = error_payload["error"]
             run.finished_at = datetime.now().astimezone()
             failed_event = AgentRunRepository(session).append_event(
                 run.id,
                 "agent_message_failed",
                 level=EventLevel.error.value,
-                payload_json={"error": str(exc), "status": RunStatus.failed.value},
+                payload_json={**error_payload, "status": RunStatus.failed.value},
             )
             session.commit()
             yield AgentStreamEvent(
@@ -174,8 +263,8 @@ def stream_agent_message(session: Session, request: AgentMessageRequest) -> Iter
                 sequence=failed_event.sequence,
                 event_type=failed_event.event_type,
                 status=RunStatus.failed.value,
-                error=str(exc),
-                payload={"error": str(exc)},
+                error=error_payload["error"],
+                payload={**error_payload, "status": RunStatus.failed.value},
             )
         else:
             yield AgentStreamEvent(
@@ -183,8 +272,8 @@ def stream_agent_message(session: Session, request: AgentMessageRequest) -> Iter
                 thread_id=prepared.thread_id,
                 run_id=prepared.run_id,
                 status=RunStatus.failed.value,
-                error=str(exc),
-                payload={"error": str(exc)},
+                error=error_payload["error"],
+                payload=error_payload,
             )
 
 
@@ -228,6 +317,61 @@ def list_run_events(session: Session, run_id: int, after_sequence: int | None = 
         statement = statement.where(AgentRunEvent.sequence > after_sequence)
     events = session.scalars(statement.order_by(AgentRunEvent.sequence)).all()
     return [run_event_read(event) for event in events]
+
+
+def _exception_payload(exc: Exception) -> dict[str, Any]:
+    message = str(exc) or repr(exc) or type(exc).__name__
+    return {
+        "error": message,
+        "error_type": f"{type(exc).__module__}.{type(exc).__name__}",
+        "traceback": "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))[-8000:],
+    }
+
+
+def _resume_decisions(request: ApprovalRequest) -> list[dict[str, Any]]:
+    if request.decisions:
+        return [decision.model_dump(exclude_none=True) for decision in request.decisions]
+    if request.decision == "approve":
+        return [{"type": "approve"}]
+    if request.decision in {"reject", "revise"}:
+        return [{"type": "reject", "args": {"comment": request.comment}}]
+    raise ValueError("At least one HITL decision is required")
+
+
+def _interrupt_payload(normalized: dict[str, Any]) -> dict[str, Any] | None:
+    data = normalized.get("data")
+    if not isinstance(data, dict):
+        return None
+    interrupt = data.get("__interrupt__")
+    if interrupt is None:
+        return None
+    interrupts = interrupt if isinstance(interrupt, list) else [interrupt]
+    payloads = [_interrupt_value(item) for item in interrupts]
+    action_requests: list[Any] = []
+    review_configs: list[Any] = []
+    for payload in payloads:
+        if isinstance(payload, dict):
+            actions = payload.get("action_requests")
+            reviews = payload.get("review_configs")
+            if isinstance(actions, list):
+                action_requests.extend(actions)
+            if isinstance(reviews, list):
+                review_configs.extend(reviews)
+    return {
+        "interrupts": _json_safe(payloads),
+        "action_requests": _json_safe(action_requests),
+        "review_configs": _json_safe(review_configs),
+        "raw": _json_safe(interrupt),
+    }
+
+
+def _interrupt_value(interrupt: Any) -> Any:
+    if isinstance(interrupt, dict) and "value" in interrupt:
+        return interrupt["value"]
+    value = getattr(interrupt, "value", None)
+    if value is not None:
+        return value
+    return interrupt
 
 
 def _run_is_cancelled(session: Session, run_id: int) -> bool:
@@ -419,9 +563,15 @@ def _stream_message_text(normalized: dict[str, Any]) -> str | None:
     if normalized.get("mode") != "messages":
         return None
     data = normalized.get("data")
-    if isinstance(data, dict) and isinstance(data.get("content"), str):
-        return data["content"]
-    return None
+    if not isinstance(data, dict) or not isinstance(data.get("content"), str):
+        return None
+    metadata = data.get("metadata")
+    if not isinstance(metadata, dict) or metadata.get("langgraph_node") != "model" or metadata.get("lc_agent_name") is not None:
+        return None
+    message = data.get("message")
+    if isinstance(message, dict) and str(message.get("type", "")).lower() not in {"ai", "aichunk", "aimessagechunk"}:
+        return None
+    return data["content"]
 
 
 def _stream_client_payload(normalized: dict[str, Any]) -> dict[str, Any]:
@@ -481,6 +631,9 @@ def _json_safe(value: Any) -> Any:
         return value
     if hasattr(value, "model_dump"):
         return _json_safe(value.model_dump())
+    interrupt_value = getattr(value, "value", None)
+    if interrupt_value is not None:
+        return {"value": _json_safe(interrupt_value)}
     content = getattr(value, "content", None)
     if content is not None:
         return {"content": _json_safe(content)}

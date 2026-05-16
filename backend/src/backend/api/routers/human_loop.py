@@ -3,11 +3,12 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from backend.agents.runner import resume_agent_run
 from backend.api.deps import get_db_session
-from backend.api.serializers import run_read, search_session_read
-from backend.db.models import AgentRun, SearchSession
+from backend.api.serializers import search_session_read
+from backend.db.models import SearchSession
 from backend.db.repositories import AgentRunRepository
-from backend.db.types import EventLevel, RunStatus, SearchStatus
+from backend.db.types import EventLevel, SearchStatus
 from backend.schemas import ApprovalRequest, ConfirmSearchCandidateRequest, RejectSearchSessionRequest, RunRead, SearchSessionRead
 from backend.services.search import PaperSearchService
 
@@ -49,13 +50,10 @@ def reject_search_session(search_session_id: int, request: RejectSearchSessionRe
 
 @router.post("/agent/runs/{run_id}/approval", response_model=RunRead)
 def approve_run(run_id: int, request: ApprovalRequest, session: Session = Depends(get_db_session)) -> RunRead:
-    run = session.get(AgentRun, run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="Run not found")
-    AgentRunRepository(session).append_event(run.id, "approval_decision", payload_json=request.model_dump())
-    if request.decision == "cancel":
-        run.status = RunStatus.cancelled.value
-    elif request.decision == "reject" and run.status in {RunStatus.pending.value, RunStatus.running.value, RunStatus.waiting_for_user.value}:
-        run.status = RunStatus.partial.value
-    session.flush()
-    return run_read(run)
+    try:
+        return resume_agent_run(session, run_id, request)
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "Run not found":
+            raise HTTPException(status_code=404, detail=detail) from exc
+        raise HTTPException(status_code=400, detail=detail) from exc

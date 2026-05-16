@@ -3,7 +3,7 @@ export type JsonObject = Record<string, JsonValue>;
 
 export type RunStatus = 'pending' | 'waiting_for_user' | 'running' | 'succeeded' | 'partial' | 'failed' | 'cancelled';
 export type ThreadStatus = 'active' | 'archived';
-export type ApprovalDecision = 'approve' | 'reject' | 'revise' | 'cancel';
+export type RunDecisionType = 'approve' | 'edit' | 'reject' | 'respond';
 export type ArtifactUploadRole = 'pdf' | 'source';
 
 export interface AgentMessageRequest {
@@ -193,8 +193,14 @@ export interface RejectSearchSessionRequest {
   reason?: string | null;
 }
 
+export interface RunDecision {
+  type: RunDecisionType;
+  args?: Record<string, unknown> | null;
+}
+
 export interface ApprovalRequest {
-  decision: ApprovalDecision;
+  decisions?: RunDecision[];
+  decision?: 'approve' | 'reject' | 'revise' | 'cancel' | null;
   comment?: string | null;
 }
 

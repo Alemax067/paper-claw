@@ -6,7 +6,7 @@ from backend.db.models import Paper
 from backend.db.repositories import ParsingRepository
 from backend.db.types import ProcessedDocumentStatus
 from backend.schemas import ResolvedProviderConfig
-from backend.tools import PAPER_CLAW_TOOLS
+from backend.tools import DISCOVERY_AGENT_TOOLS, EVIDENCE_AGENT_TOOLS, INGESTION_AGENT_TOOLS, MAIN_AGENT_TOOLS, PAPER_CLAW_TOOLS, REPORT_AGENT_TOOLS
 from backend.tools.context import set_tool_session_factory
 from backend.tools.paper_qa import retrieve_paper_evidence
 from backend.tools.paper_reports import generate_paper_report
@@ -14,19 +14,28 @@ from backend.tools.paper_search import get_paper
 
 
 def test_expected_tool_names_exist():
-    names = {tool.name for tool in PAPER_CLAW_TOOLS}
-    assert {
-        "search_papers",
-        "confirm_paper_candidate",
+    assert {tool.name for tool in PAPER_CLAW_TOOLS} == {tool.name for tool in MAIN_AGENT_TOOLS}
+    assert {tool.name for tool in MAIN_AGENT_TOOLS} == {
+        "get_active_paper",
+        "set_thread_focus",
         "get_paper",
+        "search_local_papers",
+        "get_paper_pipeline_status",
+        "list_paper_artifacts",
+        "list_paper_reports",
+    }
+    assert {tool.name for tool in DISCOVERY_AGENT_TOOLS} == {"search_papers", "confirm_paper_candidate", "get_paper", "search_local_papers"}
+    assert {tool.name for tool in INGESTION_AGENT_TOOLS} == {
+        "get_paper_pipeline_status",
+        "list_paper_artifacts",
         "acquire_paper_artifacts",
+        "register_local_paper_pdf",
+        "register_local_paper_source",
         "parse_paper",
         "process_paper_document",
-        "embed_paper_chunks",
-        "retrieve_paper_evidence",
-        "generate_paper_report",
-        "answer_paper_question",
-    }.issubset(names)
+    }
+    assert {tool.name for tool in EVIDENCE_AGENT_TOOLS} == {"get_paper_pipeline_status", "retrieve_paper_evidence"}
+    assert {tool.name for tool in REPORT_AGENT_TOOLS} == {"get_paper_pipeline_status", "list_paper_reports", "generate_paper_report"}
 
 
 def test_tools_can_be_invoked_directly(session, engine, monkeypatch):

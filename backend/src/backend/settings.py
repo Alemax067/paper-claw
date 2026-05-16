@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -44,7 +44,9 @@ class Settings(BaseSettings):
     embedding_api_key: str | None = None
     embedding_base_url: str | None = None
     embedding_model: str | None = None
-    embedding_dimension: int | None = None
+    embedding_dimension: int = 1536
+    embedding_max_context_tokens: int = Field(default=8192, validation_alias=AliasChoices("PAPER_CLAW_EMBEDDING_MAX_CONTEXT_TOKENS", "MAX_CONTEXT_TOKENS", "embedding_max_context_tokens"))
+    tokenizer_encoding: str = Field(default="cl100k_base", validation_alias=AliasChoices("PAPER_CLAW_TOKENIZER_ENCODING", "TOKENIZER_ENCODING", "tokenizer_encoding"))
     embedding_timeout_seconds: int = 60
     embedding_max_retries: int = 2
 

@@ -18,11 +18,14 @@ class RetrievalService:
         self.session = session
         self.embedding_service = embedding_service or EmbeddingService(session)
 
-    def retrieve(self, paper_id: int, query: str, *, limit: int = 5, provider_name: str | None = None) -> list[RetrievedChunk]:
+    def retrieve(self, paper_id: int, query: str, *, limit: int = 5) -> list[RetrievedChunk]:
         chunks = self._paper_chunks(paper_id)
         embedded_chunks = [chunk for chunk in chunks if chunk.embedding is not None]
         if embedded_chunks:
-            query_vector, _ = self.embedding_service.embed_query(query, provider_name=provider_name)
+            try:
+                query_vector, _ = self.embedding_service.embed_query(query)
+            except Exception:
+                return self.retrieve_lexical(paper_id, query, limit=limit)
             ranked = sorted(
                 (
                     RetrievedChunk(

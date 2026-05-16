@@ -10,7 +10,7 @@ from langgraph.types import Command
 from backend.agents.context import PaperClawContext
 from backend.db.repositories import AgentRunRepository
 from backend.db.types import EventLevel
-from backend.tools.context import tool_session
+from backend.tools.context import tool_runtime_context, tool_session
 
 
 def record_tool_event_call(
@@ -33,7 +33,11 @@ def record_tool_event_call(
             },
         )
     try:
-        result = handler(request)
+        if isinstance(context, PaperClawContext):
+            with tool_runtime_context(context):
+                result = handler(request)
+        else:
+            result = handler(request)
     except Exception as exc:
         if run_id is not None:
             _append_tool_event(

@@ -7,7 +7,6 @@ import { LoadingBlock } from '../../components/LoadingBlock';
 import { StatusBadge } from '../../components/StatusBadge';
 import { useAsyncResource } from '../../hooks/useAsyncResource';
 import { usePolling } from '../../hooks/usePolling';
-import { SearchSessionDecisionPanel } from '../search/SearchSessionDecisionPanel';
 import { MessageComposer } from './MessageComposer';
 import { RunDecisionPanel } from './RunDecisionPanel';
 import { MessageTranscript } from './MessageTranscript';
@@ -150,10 +149,8 @@ export function AgentPanel({
   };
 
   const threadRuns = activeRun ? mergeRuns(thread?.runs ?? [], activeRun) : thread?.runs ?? [];
-  const searchSessionIds = activeRun ? activeSearchSessionIds(activeRun) : [];
   const showRunDecision = activeRun?.status === 'waiting_for_user';
   const showCancelRun = Boolean(activeRunId && activeRun && cancellableRunStatuses.has(activeRun.status));
-  const hasDecisionControls = Boolean(showRunDecision || searchSessionIds.length);
 
   return (
     <section className="chat-main" aria-label="Chat workspace">
@@ -173,12 +170,9 @@ export function AgentPanel({
         <ErrorBanner message={error} />
         {loading && selectedThreadId && <LoadingBlock label="Loading transcript" />}
         <MessageTranscript messages={thread?.messages ?? []} runs={threadRuns} />
-        {hasDecisionControls && (
+        {showRunDecision && (
           <div className="inline-decision-stack">
-            {showRunDecision && <RunDecisionPanel run={activeRun} onRefresh={onRefresh} />}
-            {searchSessionIds.map((searchSessionId) => (
-              <SearchSessionDecisionPanel key={searchSessionId} searchSessionId={searchSessionId} onRefresh={onRefresh} />
-            ))}
+            <RunDecisionPanel run={activeRun} onRefresh={onRefresh} />
           </div>
         )}
         {(streamStatus || streamingText || streamRun) && (
@@ -241,13 +235,3 @@ function mergeRuns(runs: RunRead[], activeRun: RunRead): RunRead[] {
   return [activeRun, ...filtered];
 }
 
-function activeSearchSessionIds(run: RunRead): number[] {
-  const ids = new Set<number>();
-  for (const event of run.events) {
-    const value = event.payload.search_session_id;
-    if (typeof value === 'number') {
-      ids.add(value);
-    }
-  }
-  return [...ids];
-}

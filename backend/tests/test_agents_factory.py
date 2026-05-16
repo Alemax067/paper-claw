@@ -5,21 +5,49 @@ from types import SimpleNamespace
 from pydantic import BaseModel
 from langchain.agents.middleware import ModelRequest
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from backend.agents.checkpointing import _psycopg_connection_string
 from backend.agents.main_agent import create_paper_claw_agent
 from backend.agents.model import _json_safe, _messages_with_active_paper_info, apply_runtime_model
 from backend.agents.subagents import create_paper_claw_subagents
+from backend.agents.tool_events import record_tool_event_call
 from backend.schemas import PaperClawContext
+from backend.tools.context import current_tool_context
 
 
 def test_subagent_names_are_unique():
     subagents = create_paper_claw_subagents()
     names = [subagent["name"] for subagent in subagents]
     assert len(names) == len(set(names))
-    assert "paper-search-specialist" in names
-    assert "paper-qa-specialist" in names
+    assert names == [
+        "paper-discovery-specialist",
+        "paper-ingestion-specialist",
+        "paper-evidence-specialist",
+        "paper-report-specialist",
+    ]
+
+
+def test_subagents_have_explicit_isolated_tools():
+    subagents = create_paper_claw_subagents()
+    tool_names_by_agent = {
+        subagent["name"]: {tool.name for tool in subagent["tools"]}
+        for subagent in subagents
+    }
+    assert tool_names_by_agent["paper-discovery-specialist"] == {"search_papers", "confirm_paper_candidate", "get_paper", "search_local_papers"}
+    assert tool_names_by_agent["paper-ingestion-specialist"] == {
+        "get_paper_pipeline_status",
+        "list_paper_artifacts",
+        "acquire_paper_artifacts",
+        "register_local_paper_pdf",
+        "register_local_paper_source",
+        "parse_paper",
+        "process_paper_document",
+    }
+    assert tool_names_by_agent["paper-evidence-specialist"] == {"get_paper_pipeline_status", "retrieve_paper_evidence"}
+    assert tool_names_by_agent["paper-report-specialist"] == {"get_paper_pipeline_status", "list_paper_reports", "generate_paper_report"}
+    assert all("tools" in subagent for subagent in subagents)
+    assert all("answer_paper_question" not in names for names in tool_names_by_agent.values())
 
 
 def test_agent_factory_constructs_without_external_model_call():
@@ -55,6 +83,25 @@ def test_active_paper_system_info_is_inserted_before_latest_user_message():
     assert [message.type for message in messages] == ["ai", "system", "human"]
     assert messages[1].content == "System info: Active paper is #1."
     assert request.messages == [AIMessage(content="previous"), HumanMessage(content="question")]
+
+
+def test_tool_middleware_binds_runtime_context():
+    seen = []
+    request = SimpleNamespace(
+        runtime=SimpleNamespace(context=PaperClawContext(thread_id=12, active_paper_id=56)),
+        tool_call={"id": "call-1", "args": {}},
+        tool=SimpleNamespace(name="fake_tool"),
+    )
+
+    def handler(_request):
+        seen.append(current_tool_context())
+        return ToolMessage(content="ok", tool_call_id="call-1")
+
+    result = record_tool_event_call(request, handler)
+
+    assert isinstance(result, ToolMessage)
+    assert seen == [PaperClawContext(thread_id=12, active_paper_id=56)]
+    assert current_tool_context() is None
 
 
 def test_model_middleware_forwards_runtime_context(monkeypatch):

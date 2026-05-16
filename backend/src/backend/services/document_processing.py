@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from backend.db.models import ParsedDocument, ProcessedDocument
 from backend.db.repositories import ParsingRepository
 from backend.db.types import ParseQualityStatus, ProcessedDocumentStatus, SectionRole
+from backend.services.embeddings import EmbeddingService
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 _PAGE_RE = re.compile(r"<!--\s*page\s+(\d+)\s*-->", re.IGNORECASE)
@@ -104,8 +105,14 @@ class DocumentProcessingService:
                 next_chunk_index += 1
         for reference_index, reference in enumerate(extract_references(sections), start=1):
             repo.add_reference(processed.id, reference_index, reference["raw_text"], **{key: value for key, value in reference.items() if key != "raw_text"})
+        self.session.flush()
+        metadata = {**processed.metadata_json, "section_count": len(sections), "section_ids": section_ids}
+        try:
+            metadata["embedded_chunk_count"] = EmbeddingService(self.session).embed_missing_chunks(parsed.paper_id)
+        except Exception as exc:
+            metadata["embedding_error"] = str(exc)
         processed.status = ProcessedDocumentStatus.ready.value
-        processed.metadata_json = {**processed.metadata_json, "section_count": len(sections), "section_ids": section_ids}
+        processed.metadata_json = metadata
         self.session.flush()
         return processed
 

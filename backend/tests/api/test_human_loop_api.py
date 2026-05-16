@@ -49,4 +49,4 @@ def test_approval_cancel_updates_run(client, session):
 
     assert response.status_code == 200
     assert response.json()["status"] == RunStatus.cancelled.value
-    assert run.events[-1].event_type == "approval_decision"
+    assert run.events[-1].event_type == "agent_run_cancelled"

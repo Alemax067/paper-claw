@@ -39,7 +39,6 @@ class ReportGenerationService:
         source_scope: str = ReportSourceScope.retrieval.value,
         query: str | None = None,
         selected_chunk_ids: list[int] | None = None,
-        provider_name: str | None = None,
         thread_id: int | None = None,
         run_id: int | None = None,
         limit: int = 5,
