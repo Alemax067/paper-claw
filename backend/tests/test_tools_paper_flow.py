@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from types import SimpleNamespace
 
 from sqlalchemy.orm import sessionmaker
 
@@ -10,6 +11,7 @@ from backend.db.types import ProcessedDocumentStatus, RunStatus, WorkflowName
 from backend.schemas import PaperClawContext, ResolvedProviderConfig
 from backend.tools import DISCOVERY_AGENT_TOOLS, EVIDENCE_AGENT_TOOLS, INGESTION_AGENT_TOOLS, MAIN_AGENT_TOOLS, PAPER_CLAW_TOOLS, REPORT_AGENT_TOOLS
 from backend.tools.context import set_tool_session_factory, tool_runtime_context
+from backend.tools.paper_parsing import ingest_paper_document
 from backend.tools.paper_qa import retrieve_paper_evidence
 from backend.tools.paper_reports import generate_paper_report
 from backend.tools.paper_search import get_paper, recommend_paper_candidates, search_papers
@@ -31,14 +33,10 @@ def test_expected_tool_names_exist():
     assert {tool.name for tool in INGESTION_AGENT_TOOLS} == {
         "get_paper_pipeline_status",
         "list_paper_artifacts",
-        "acquire_paper_artifacts",
         "download_arxiv_paper_artifacts",
         "download_paper_pdf_from_url",
         "mark_paper_artifact_upload_required",
-        "register_local_paper_pdf",
-        "register_local_paper_source",
-        "parse_paper",
-        "process_paper_document",
+        "ingest_paper_document",
     }
     assert {tool.name for tool in EVIDENCE_AGENT_TOOLS} == {"get_paper_pipeline_status", "retrieve_paper_evidence"}
     assert {tool.name for tool in REPORT_AGENT_TOOLS} == {"get_paper_pipeline_status", "list_paper_reports", "generate_paper_report"}
@@ -181,6 +179,68 @@ def test_search_papers_records_candidate_not_found_event(session, engine):
     assert event.payload_json["search_session_id"] == result["search_session_id"]
     assert event.payload_json["candidate_count"] == 0
     assert event.payload_json["candidate_ids"] == []
+
+
+
+def test_ingest_paper_document_returns_parse_failed_without_processing(session, engine, monkeypatch):
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    paper = Paper(title="Unparseable Paper")
+    session.add(paper)
+    session.commit()
+
+    def fake_run_parse_chain(_service, paper_id, run_id=None):
+        return SimpleNamespace(id=10, status="failed", strategy="unavailable", error_message="No parseable artifact.")
+
+    def fail_process(_service, _paper_id):
+        raise AssertionError("process should not run after parse failure")
+
+    monkeypatch.setattr("backend.tools.paper_parsing.ParseChainService.run_parse_chain", fake_run_parse_chain)
+    monkeypatch.setattr("backend.tools.paper_parsing.DocumentProcessingService.process_latest_parsed_document", fail_process)
+    set_tool_session_factory(factory)
+    try:
+        result = ingest_paper_document.invoke({"paper_id": paper.id})
+    finally:
+        set_tool_session_factory(None)
+
+    assert result == {
+        "paper_id": paper.id,
+        "status": "parse_failed",
+        "parse_job_id": 10,
+        "strategy": "unavailable",
+        "error": "No parseable artifact.",
+    }
+
+
+
+def test_ingest_paper_document_processes_after_successful_parse(session, engine, monkeypatch):
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    paper = Paper(title="Parseable Paper")
+    session.add(paper)
+    session.commit()
+
+    def fake_run_parse_chain(_service, paper_id, run_id=None):
+        return SimpleNamespace(id=11, status="succeeded", strategy="tex", error_message=None)
+
+    def fake_process(_service, paper_id):
+        return SimpleNamespace(id=12, paper_id=paper_id, status="ready", version=1)
+
+    monkeypatch.setattr("backend.tools.paper_parsing.ParseChainService.run_parse_chain", fake_run_parse_chain)
+    monkeypatch.setattr("backend.tools.paper_parsing.DocumentProcessingService.process_latest_parsed_document", fake_process)
+    set_tool_session_factory(factory)
+    try:
+        result = ingest_paper_document.invoke({"paper_id": paper.id})
+    finally:
+        set_tool_session_factory(None)
+
+    assert result == {
+        "paper_id": paper.id,
+        "status": "ready",
+        "parse_job_id": 11,
+        "strategy": "tex",
+        "processed_document_id": 12,
+        "processed_status": "ready",
+        "version": 1,
+    }
 
 
 

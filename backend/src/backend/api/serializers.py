@@ -146,7 +146,17 @@ def paper_detail(paper: Paper) -> PaperDetail:
             for link in paper.paper_artifacts
         ],
         parse_jobs=[{"id": job.id, "strategy": job.strategy, "status": job.status, "error_message": job.error_message} for job in paper.parse_jobs],
-        processed_documents=[{"id": doc.id, "version": doc.version, "status": doc.status, "quality_status": doc.quality_status} for doc in paper.processed_documents],
+        processed_documents=[
+            {
+                "id": doc.id,
+                "version": doc.version,
+                "status": doc.status,
+                "quality_status": doc.quality_status,
+                "quality_summary": doc.quality_summary,
+                "content_markdown": doc.content_markdown,
+            }
+            for doc in paper.processed_documents
+        ],
         reports=[{"id": report.id, "title": report.title, "status": report.status, "report_type": report.report_type} for report in []],
     )
 

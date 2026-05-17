@@ -5,6 +5,7 @@ import { ErrorBanner } from '../../components/ErrorBanner';
 import { LoadingBlock } from '../../components/LoadingBlock';
 import { StatusBadge } from '../../components/StatusBadge';
 import { useAsyncResource } from '../../hooks/useAsyncResource';
+import { MarkdownMessage } from '../agent/MarkdownMessage';
 import { ArtifactUpload } from './ArtifactUpload';
 
 interface PaperDetailProps {
@@ -25,6 +26,9 @@ export function PaperDetail({ paperId, activeRunId, activePaperId, refreshToken,
     return api.getPaper(paperId);
   }, [paperId]);
   const { data: paper, loading, error, reload } = useAsyncResource(loader, [refreshToken]);
+  const latestReadyDocument = [...(paper?.processed_documents ?? [])]
+    .reverse()
+    .find((document: Record<string, unknown>) => document.status === 'ready' && typeof document.content_markdown === 'string' && document.content_markdown.length > 0);
 
   const refresh = () => {
     reload();
@@ -61,6 +65,17 @@ export function PaperDetail({ paperId, activeRunId, activePaperId, refreshToken,
             <DossierSection title="Artifacts" items={paper.artifacts} />
             <DossierSection title="Parse jobs" items={paper.parse_jobs} />
             <DossierSection title="Processed documents" items={paper.processed_documents} />
+            <div className="stack">
+              <h3>Parsed document</h3>
+              {latestReadyDocument ? (
+                <details className="dossier-record" open>
+                  <summary>ready document #{String(latestReadyDocument.id)}</summary>
+                  <MarkdownMessage content={String(latestReadyDocument.content_markdown)} />
+                </details>
+              ) : (
+                <p className="meta-row">No ready parsed document.</p>
+              )}
+            </div>
             <div className="stack">
               <h3>Reports</h3>
               {!paper.reports.length && <p className="meta-row">No reports linked.</p>}

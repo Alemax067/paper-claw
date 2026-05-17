@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import tarfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -61,6 +62,125 @@ This is \textbf{important} text.
     assert payload.strategy == ParseStrategy.tex.value
     assert "## Abstract" in payload.markdown_content
     assert "important" in payload.plain_text
+
+
+def test_tex_source_parser_expands_includes_and_bibliography(tmp_path):
+    sections = tmp_path / "sections"
+    sections.mkdir()
+    (tmp_path / "main.tex").write_text(
+        r"""
+\documentclass{article}
+\title{Included Paper}
+\begin{document}
+\maketitle
+\begin{abstract}A structured abstract.\end{abstract}
+\input{sections/intro}
+\bibliography{refs}
+\end{document}
+""",
+        encoding="utf-8",
+    )
+    (sections / "intro.tex").write_text(r"\section{Introduction}Included body text.", encoding="utf-8")
+    (tmp_path / "refs.bib").write_text(
+        r"""
+@inproceedings{smith2024,
+  author = {Alice Smith and Bob Jones},
+  title = {A Referenced Paper},
+  booktitle = {Conference on Testing},
+  year = {2024},
+  doi = {10.1000/test}
+}
+""",
+        encoding="utf-8",
+    )
+
+    payload = TexSourceParser().parse(tmp_path / "main.tex")
+
+    assert "# Included Paper" in payload.markdown_content
+    assert "## Abstract" in payload.markdown_content
+    assert "## Introduction" in payload.markdown_content
+    assert "Included body text" in payload.markdown_content
+    assert "## References" in payload.markdown_content
+    assert "A Referenced Paper" in payload.markdown_content
+    assert payload.json_content["used_files"] == ["main.tex", "sections/intro.tex"]
+    assert payload.json_content["references_count"] == 1
+
+
+def test_tex_source_parser_preserves_sections_after_display_math_and_layout_envs(tmp_path):
+    tex = tmp_path / "main.tex"
+    tex.write_text(
+        r"""
+\documentclass{article}
+\title{Latent Test}
+\newcommand{\ours}{LatentMAS\xspace}
+\begin{document}
+\begin{abstract}
+{\fontsize{10pt}{10pt} \selectfont \raisebox{-0.1em}{\includegraphics[height=1em]{logo.png}} Code: \href{https://example.test}{https://example.test}}\\[0.6em]
+Abstract body with 4$\times$ speedup.
+\end{abstract}
+\begin{tcolorbox}[
+  enhanced,
+  colback=white,
+  boxrule=.7pt
+]
+\begin{center}
+\textbf{Can multi-agent systems achieve pure latent collaboration?}
+\end{center}
+\end{tcolorbox}
+\section{Preliminary}
+Let $W_a$ align $h$ to $e$.
+\begin{equation}
+W_a = (W_\text{out}^\top W_\text{out} + \lambda I)^{-1} W_\text{out}^\top W_\text{in}
+\end{equation}
+\section{Method}
+\ours keeps the method body after display math.
+\section{Experiments}
+Experiment body.
+\section{Conclusion}
+Conclusion body.
+\end{document}
+""",
+        encoding="utf-8",
+    )
+
+    payload = TexSourceParser().parse(tex)
+
+    assert "PAPERCLAWMATH" not in payload.markdown_content
+    assert "colback" not in payload.markdown_content
+    assert "10pt" not in payload.markdown_content
+    assert "[0.6em]" not in payload.markdown_content
+    assert "## Method" in payload.markdown_content
+    assert "## Experiments" in payload.markdown_content
+    assert "## Conclusion" in payload.markdown_content
+    assert "$W_a$" in payload.markdown_content
+    assert "LatentMAS keeps the method body after display math." in payload.markdown_content
+
+
+def test_tex_source_parser_warns_on_missing_include(tmp_path):
+    tex = tmp_path / "main.tex"
+    tex.write_text(r"\documentclass{article}\begin{document}\input{missing}\section{Body}Text\end{document}", encoding="utf-8")
+
+    payload = TexSourceParser().parse(tex)
+
+    assert "Missing include file: missing" in payload.warnings
+    assert payload.json_content["missing_includes"] == ["missing"]
+    assert "## Body" in payload.markdown_content
+
+
+def test_tex_source_parser_skips_unsafe_tar_member(tmp_path):
+    archive = tmp_path / "source.tar"
+    safe = tmp_path / "safe.tex"
+    safe.write_text(r"\documentclass{article}\begin{document}\section{Safe}Text\end{document}", encoding="utf-8")
+    unsafe = tmp_path / "unsafe.tex"
+    unsafe.write_text("unsafe", encoding="utf-8")
+    with tarfile.open(archive, "w") as tar:
+        tar.add(safe, arcname="main.tex")
+        tar.add(unsafe, arcname="../unsafe.tex")
+
+    payload = TexSourceParser().parse(archive)
+
+    assert "Skipped unsafe archive member: ../unsafe.tex" in payload.warnings
+    assert "## Safe" in payload.markdown_content
 
 
 def test_plan_parse_chain_prefers_tex_source_over_pdf(session, tmp_path):

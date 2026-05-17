@@ -5,6 +5,7 @@ export interface AsyncResource<T> {
   loading: boolean;
   error: string | null;
   reload: () => void;
+  setData: (data: T | null) => void;
 }
 
 export function useAsyncResource<T>(loader: () => Promise<T>, deps: unknown[] = []): AsyncResource<T> {
@@ -40,5 +41,5 @@ export function useAsyncResource<T>(loader: () => Promise<T>, deps: unknown[] = 
     };
   }, [loader, version, ...deps]);
 
-  return { data, loading, error, reload };
+  return { data, loading, error, reload, setData };
 }

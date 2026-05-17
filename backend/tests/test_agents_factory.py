@@ -38,14 +38,10 @@ def test_subagents_have_explicit_isolated_tools():
     assert tool_names_by_agent["paper-ingestion-specialist"] == {
         "get_paper_pipeline_status",
         "list_paper_artifacts",
-        "acquire_paper_artifacts",
         "download_arxiv_paper_artifacts",
         "download_paper_pdf_from_url",
         "mark_paper_artifact_upload_required",
-        "register_local_paper_pdf",
-        "register_local_paper_source",
-        "parse_paper",
-        "process_paper_document",
+        "ingest_paper_document",
     }
     assert tool_names_by_agent["paper-evidence-specialist"] == {"get_paper_pipeline_status", "retrieve_paper_evidence"}
     assert tool_names_by_agent["paper-report-specialist"] == {"get_paper_pipeline_status", "list_paper_reports", "generate_paper_report"}
@@ -62,14 +58,21 @@ def test_discovery_prompt_returns_candidates_for_deterministic_confirmation():
     assert "interrupt_on" not in subagent
 
 
-def test_ingestion_prompt_prepares_artifacts_from_metadata():
+def test_ingestion_prompt_prepares_artifacts_and_processes_documents():
     subagent = create_paper_claw_subagents()[1]
 
     assert "get_paper_pipeline_status(include_metadata=True)" in subagent["system_prompt"]
     assert "extract the arXiv id" in subagent["system_prompt"]
     assert "https://arxiv.org/src/{id}" in subagent["system_prompt"]
     assert "download_paper_pdf_from_url" in subagent["system_prompt"]
+    assert "call ingest_paper_document exactly once" in subagent["system_prompt"]
+    assert "returns one status: ready, parse_failed, or processing_failed" in subagent["system_prompt"]
+    assert "frontend-ready markdown" in subagent["system_prompt"]
+    assert "structured PaperReference rows" in subagent["system_prompt"]
+    assert "must not be described as retrieval chunks or embedding content" in subagent["system_prompt"]
     assert "waiting_for_user_upload" in subagent["system_prompt"]
+    assert "parse_failed" in subagent["system_prompt"]
+    assert "processing_failed" in subagent["system_prompt"]
 
 
 def test_agent_factory_constructs_without_external_model_call():

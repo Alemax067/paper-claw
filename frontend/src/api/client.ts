@@ -76,13 +76,13 @@ async function streamNdjson<T>(response: Response, onEvent: (event: T) => void):
 export const api = {
   health: () => requestJson<{ status: string }>('/api/health'),
 
-  listThreads: () => requestJson<ThreadSummary[]>('/api/threads'),
-  getThread: (threadId: number) => requestJson<ThreadDetail>(`/api/threads/${threadId}`),
+  listThreads: () => requestJson<ThreadSummary[]>('/api/threads', { cache: 'no-store' }),
+  getThread: (threadId: number) => requestJson<ThreadDetail>(`/api/threads/${threadId}`, { cache: 'no-store' }),
   archiveThread: (threadId: number) => requestJson<ThreadSummary>(`/api/threads/${threadId}/archive`, { method: 'POST' }),
   listMemories: () => requestJson<MemoryRead[]>('/api/memories'),
   getRuntimeSettings: () => requestJson<RuntimeSettingsRead>('/api/settings/runtime'),
 
-  getRun: (runId: number) => requestJson<RunRead>(`/api/runs/${runId}`),
+  getRun: (runId: number) => requestJson<RunRead>(`/api/runs/${runId}`, { cache: 'no-store' }),
   listRunEvents: (runId: number, afterSequence?: number) => {
     const suffix = afterSequence === undefined ? '' : `?after_sequence=${afterSequence}`;
     return requestJson<RunEventRead[]>(`/api/agent/runs/${runId}/events${suffix}`);

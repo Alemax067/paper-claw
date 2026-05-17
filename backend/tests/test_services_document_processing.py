@@ -55,6 +55,8 @@ def test_extract_references():
     references = extract_references(split_markdown_sections(MARKDOWN))
 
     assert references[0]["doi"] == "10.1000/abc123"
+    assert references[0]["title"] == "A DOI paper"
+    assert references[0]["authors_json"] == ["A. Author"]
     assert references[1]["arxiv_id"] == "2401.00001"
     assert references[1]["url"] == "https://example.com/paper"
 
@@ -65,11 +67,17 @@ def test_process_parsed_document_creates_ready_document_sections_chunks_referenc
     processed = DocumentProcessingService(session, chunk_size_chars=80, chunk_overlap_chars=10).process_parsed_document(parsed.id)
 
     assert processed.status == ProcessedDocumentStatus.ready.value
-    assert processed.content_markdown == MARKDOWN
+    assert processed.content_markdown == MARKDOWN.strip()
+    assert processed.metadata_json["analysis_excludes_roles"] == [SectionRole.reference.value]
+    assert processed.metadata_json["skipped_chunk_roles"] == [SectionRole.reference.value]
     assert len(processed.sections) == 4
-    assert len(processed.chunks) >= 4
+    assert len(processed.chunks) >= 3
+    assert all(chunk.role != SectionRole.reference.value for chunk in processed.chunks)
+    assert all("A DOI paper" not in chunk.content_text for chunk in processed.chunks)
     assert len(processed.references) == 2
     assert processed.references[0].doi == "10.1000/abc123"
+    assert processed.references[0].authors_json == ["A. Author"]
+    assert processed.references[0].title == "A DOI paper"
 
 
 def test_chunk_key_and_index_are_unique(session):
