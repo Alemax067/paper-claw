@@ -14,13 +14,16 @@ class OpenAICompatibleChatModelAdapter:
 
     def generate_text(self, provider: ResolvedProviderConfig, messages: list[dict]) -> str:
         client = self.client or OpenAI(api_key=provider.api_key or resolve_api_key(provider.api_key_ref), base_url=provider.base_url)
-        response = client.chat.completions.create(
-            model=provider.model,
-            messages=messages,
-            temperature=provider.temperature,
-            max_tokens=provider.settings.get("max_tokens"),
-            timeout=provider.settings.get("timeout"),
-        )
+        kwargs = {
+            "model": provider.model,
+            "messages": messages,
+            "temperature": provider.temperature,
+            "max_tokens": provider.settings.get("max_tokens"),
+            "timeout": provider.settings.get("timeout"),
+        }
+        if provider.settings.get("extra_body") is not None:
+            kwargs["extra_body"] = provider.settings["extra_body"]
+        response = client.chat.completions.create(**kwargs)
         if not response.choices:
             raise RuntimeError("Chat model returned no choices.")
         return str(response.choices[0].message.content or "")

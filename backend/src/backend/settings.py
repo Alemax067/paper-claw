@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -37,6 +38,7 @@ class Settings(BaseSettings):
     chat_max_tokens: int = 4096
     chat_timeout_seconds: int = 60
     chat_max_retries: int = 2
+    chat_extra_body: dict[str, Any] | None = None
     chat_rate_limiter_requests_per_second: float | None = None
     chat_rate_limiter_check_every_n_seconds: float = 0.1
     chat_rate_limiter_max_bucket_size: int = 10

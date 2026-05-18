@@ -53,6 +53,9 @@ def chat_provider_from_settings(settings: Settings | None = None) -> ResolvedPro
     settings = settings or get_settings()
     if not settings.chat_model or not settings.chat_model.strip():
         raise ProviderResolutionError("chat_model_missing", "PAPER_CLAW_CHAT_MODEL is not set.")
+    provider_settings: dict[str, object] = {"max_tokens": settings.chat_max_tokens, "timeout": settings.chat_timeout_seconds, "max_retries": settings.chat_max_retries}
+    if settings.chat_extra_body is not None:
+        provider_settings["extra_body"] = settings.chat_extra_body
     return ResolvedProviderConfig(
         id=0,
         name="settings-chat",
@@ -62,7 +65,7 @@ def chat_provider_from_settings(settings: Settings | None = None) -> ResolvedPro
         model=settings.chat_model,
         api_key=settings.chat_api_key,
         temperature=settings.chat_temperature,
-        settings={"max_tokens": settings.chat_max_tokens, "timeout": settings.chat_timeout_seconds, "max_retries": settings.chat_max_retries},
+        settings=provider_settings,
     )
 
 

@@ -45,5 +45,6 @@ def _provider_from_context(context) -> ResolvedProviderConfig | None:
             "max_tokens": getattr(context, "max_tokens", None),
             "timeout": getattr(context, "timeout", None),
             "max_retries": getattr(context, "max_retries", None),
+            "extra_body": getattr(context, "extra_body", None),
         },
     )

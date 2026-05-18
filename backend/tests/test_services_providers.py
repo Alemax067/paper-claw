@@ -114,6 +114,7 @@ def test_settings_load_model_environment(monkeypatch):
     monkeypatch.setenv("PAPER_CLAW_CHAT_RATE_LIMITER_REQUESTS_PER_SECOND", "1.5")
     monkeypatch.setenv("PAPER_CLAW_CHAT_RATE_LIMITER_CHECK_EVERY_N_SECONDS", "0.2")
     monkeypatch.setenv("PAPER_CLAW_CHAT_RATE_LIMITER_MAX_BUCKET_SIZE", "7")
+    monkeypatch.setenv("PAPER_CLAW_CHAT_EXTRA_BODY", '{"thinking": {"type": "disabled"}}')
     monkeypatch.setenv("PAPER_CLAW_EMBEDDING_MODEL", "embed-test")
     monkeypatch.setenv("PAPER_CLAW_EMBEDDING_DIMENSION", "1536")
     monkeypatch.setenv("PAPER_CLAW_LOCAL_OCR_MODEL", "ocr-test")
@@ -126,6 +127,7 @@ def test_settings_load_model_environment(monkeypatch):
     assert settings.chat_base_url == "https://chat.example/v1"
     assert settings.chat_rate_limiter_requests_per_second == 1.5
     assert settings.chat_rate_limiter_check_every_n_seconds == 0.2
+    assert settings.chat_extra_body["thinking"] == {"type": "disabled"}
     assert settings.chat_rate_limiter_max_bucket_size == 7
     assert settings.embedding_model == "embed-test"
     assert settings.embedding_dimension == 1536
@@ -136,6 +138,7 @@ def test_settings_load_model_environment(monkeypatch):
 def test_settings_derived_providers(monkeypatch):
     monkeypatch.setenv("PAPER_CLAW_CHAT_MODEL", "openai:gpt-test")
     monkeypatch.setenv("PAPER_CLAW_CHAT_API_KEY", "chat-secret")
+    monkeypatch.setenv("PAPER_CLAW_CHAT_EXTRA_BODY", '{"thinking": {"type": "disabled"}}')
     monkeypatch.setenv("PAPER_CLAW_EMBEDDING_MODEL", "embed-test")
     monkeypatch.setenv("PAPER_CLAW_EMBEDDING_API_KEY", "embed-secret")
     monkeypatch.setenv("PAPER_CLAW_EMBEDDING_DIMENSION", "12")
@@ -147,6 +150,7 @@ def test_settings_derived_providers(monkeypatch):
     assert chat.name == "settings-chat"
     assert chat.model == "openai:gpt-test"
     assert chat.api_key == "chat-secret"
+    assert chat.settings["extra_body"]["thinking"] == {"type": "disabled"}
     assert embedding.name == "settings-embedding"
     assert embedding.model == "embed-test"
     assert embedding.api_key == "embed-secret"

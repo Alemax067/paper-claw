@@ -56,6 +56,7 @@ def test_agent_context_request_model_falls_back_to_settings_provider(monkeypatch
     monkeypatch.setenv("PAPER_CLAW_CHAT_MODEL", "settings-model")
     monkeypatch.setenv("PAPER_CLAW_CHAT_TEMPERATURE", "0.4")
     monkeypatch.setenv("PAPER_CLAW_CHAT_MAX_TOKENS", "1234")
+    monkeypatch.setenv("PAPER_CLAW_CHAT_EXTRA_BODY", '{"thinking": {"type": "disabled"}}')
     clear_settings_cache()
     try:
         context = _agent_context(
@@ -70,6 +71,7 @@ def test_agent_context_request_model_falls_back_to_settings_provider(monkeypatch
     assert context.base_url == "https://chat.example/v1"
     assert context.temperature == 0.4
     assert context.max_tokens == 1234
+    assert context.extra_body["thinking"] == {"type": "disabled"}
 
 
 def test_agent_context_request_provider_overrides_settings(monkeypatch):

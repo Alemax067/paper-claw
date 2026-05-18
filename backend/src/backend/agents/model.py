@@ -22,16 +22,19 @@ def runtime_model(request: ModelRequest):
     if not isinstance(context, PaperClawContext) or not context.model or not context.model.strip():
         return None
     _install_openai_payload_logger()
-    return ChatOpenAI(
-        model=context.model,
-        api_key=context.api_key,
-        base_url=context.base_url,
-        temperature=context.temperature,
-        max_tokens=context.max_tokens,
-        timeout=context.timeout,
-        max_retries=context.max_retries,
-        rate_limiter=context.rate_limiter,
-    )
+    kwargs: dict[str, Any] = {
+        "model": context.model,
+        "api_key": context.api_key,
+        "base_url": context.base_url,
+        "temperature": context.temperature,
+        "max_tokens": context.max_tokens,
+        "timeout": context.timeout,
+        "max_retries": context.max_retries,
+        "rate_limiter": context.rate_limiter,
+    }
+    if context.extra_body is not None:
+        kwargs["extra_body"] = context.extra_body
+    return ChatOpenAI(**kwargs)
 
 
 def apply_runtime_model(request: ModelRequest) -> None:
@@ -50,9 +53,9 @@ def paper_claw_model_middleware(request: ModelRequest, handler: Callable[[ModelR
     if messages is not request.messages:
         overrides["messages"] = messages
     effective_request = request if not overrides else request.override(**overrides)
-    _log_model_request(effective_request)
+    # _log_model_request(effective_request)
     response = handler(effective_request)
-    _log_model_response(effective_request, response)
+    # _log_model_response(effective_request, response)
     return response
 
 

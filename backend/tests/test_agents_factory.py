@@ -183,6 +183,7 @@ def test_model_middleware_forwards_runtime_context(monkeypatch):
                 max_tokens=123,
                 timeout=45,
                 max_retries=4,
+                extra_body={"thinking": {"type": "disabled"}},
                 rate_limiter="limiter",
             )
         ),
@@ -201,4 +202,5 @@ def test_model_middleware_forwards_runtime_context(monkeypatch):
         "timeout": 45,
         "max_retries": 4,
         "rate_limiter": "limiter",
+        "extra_body": {"thinking": {"type": "disabled"}},
     }

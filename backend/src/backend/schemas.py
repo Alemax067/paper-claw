@@ -312,6 +312,7 @@ class PaperClawContext:
     max_tokens: int = 4096
     timeout: int = 60
     max_retries: int = 2
+    extra_body: dict[str, Any] | None = None
     rate_limiter: Any | None = None
     chat_provider_name: str | None = None
     embedding_provider_name: str | None = None

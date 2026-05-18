@@ -157,13 +157,22 @@ def test_openai_compatible_chat_adapter_uses_injected_client():
         return response
 
     client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
-    provider = ResolvedProviderConfig(id=1, name="chat", kind="chat", provider="openai_compatible", model="model", temperature=0.2, settings={"max_tokens": 100, "timeout": 30})
+    provider = ResolvedProviderConfig(
+        id=1,
+        name="chat",
+        kind="chat",
+        provider="openai_compatible",
+        model="model",
+        temperature=0.2,
+        settings={"max_tokens": 100, "timeout": 30, "extra_body": {"thinking": {"type": "disabled"}}},
+    )
 
     text = OpenAICompatibleChatModelAdapter(client).generate_text(provider, [{"role": "user", "content": "hi"}])
 
     assert text == "model output"
     assert calls[0]["model"] == "model"
     assert calls[0]["max_tokens"] == 100
+    assert calls[0]["extra_body"] == {"thinking": {"type": "disabled"}}
 
 
 def test_generate_reading_report_fails_without_ready_processed_document(session):
