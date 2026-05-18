@@ -105,6 +105,30 @@ def test_paper_detail_includes_aggregate_state(client, session, tmp_path):
     assert payload["reports"][0]["title"] == "API report"
 
 
+def test_delete_report_removes_report_and_evidence(client, session):
+    paper = Paper(title="Delete report paper")
+    session.add(paper)
+    session.flush()
+    report = Report(title="Delete report", paper_id=paper.id, report_type=ReportType.paper_summary.value, markdown_content="report")
+    session.add(report)
+    session.flush()
+    evidence = ReportEvidence(report_id=report.id, evidence_type=EvidenceType.paper.value, paper_id=paper.id, quote_text="quote")
+    session.add(evidence)
+    session.commit()
+
+    response = client.delete(f"/api/reports/{report.id}")
+
+    assert response.status_code == 204
+    assert session.get(Report, report.id) is None
+    assert session.get(ReportEvidence, evidence.id) is None
+
+
+def test_delete_missing_report_returns_404(client):
+    response = client.delete("/api/reports/999")
+
+    assert response.status_code == 404
+
+
 def test_report_detail_includes_evidence(client, session):
     paper = Paper(title="Evidence paper")
     session.add(paper)

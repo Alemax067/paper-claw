@@ -143,6 +143,11 @@ export const api = {
 
   listReports: () => requestJson<ReportSummary[]>('/api/reports'),
   getReport: (reportId: number) => requestJson<ReportRead>(`/api/reports/${reportId}`),
+  deleteReport: (reportId: number) => fetch(`${API_BASE_URL}/api/reports/${reportId}`, { method: 'DELETE' }).then(async (response) => {
+    if (!response.ok) {
+      throw await toApiError(response);
+    }
+  }),
 
   getArtifact: (artifactId: number) => requestJson<ArtifactRead>(`/api/artifacts/${artifactId}`),
   uploadPaperArtifact: (paperId: number, request: UploadArtifactRequest) => {

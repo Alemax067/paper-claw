@@ -390,12 +390,18 @@ class ReportGenerationService:
             report.error_message = "Reading report validation failed: " + "; ".join(validation.issues)
             report.markdown_content = markdown[:10000]
             self.session.flush()
-            return ReportGenerationResult(report_id=report.id, status=report.status, markdown_content=report.markdown_content, json_content=report.json_content)
+            return ReportGenerationResult(
+                report_id=report.id,
+                status=report.status,
+                markdown_content=report.markdown_content,
+                json_content=report.json_content,
+                error_message=report.error_message,
+            )
         except Exception as exc:
             report.status = ReportStatus.failed.value
             report.error_message = str(exc)
             self.session.flush()
-            return ReportGenerationResult(report_id=report.id, status=report.status, json_content={"error": str(exc)})
+            return ReportGenerationResult(report_id=report.id, status=report.status, json_content={"error": str(exc)}, error_message=report.error_message)
 
     def generate_report(
         self,
@@ -442,7 +448,7 @@ class ReportGenerationService:
             report.status = ReportStatus.failed.value
             report.error_message = str(exc)
             self.session.flush()
-            return ReportGenerationResult(report_id=report.id, status=report.status, json_content={"error": str(exc)})
+            return ReportGenerationResult(report_id=report.id, status=report.status, json_content={"error": str(exc)}, error_message=report.error_message)
 
     def _select_evidence(
         self,
@@ -670,7 +676,7 @@ class ReportGenerationService:
             error_message=error,
         )
         self.session.flush()
-        return ReportGenerationResult(report_id=report.id, status=report.status, json_content={"error": error})
+        return ReportGenerationResult(report_id=report.id, status=report.status, json_content={"error": error}, error_message=error)
 
 
 def _reading_report_metadata(

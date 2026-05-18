@@ -73,6 +73,11 @@ class RecordingAdapter:
         return self.responses[0]
 
 
+class FailingAdapter:
+    def generate_text(self, provider: ResolvedProviderConfig, messages: list[dict]) -> str:
+        raise TimeoutError("Request timed out.")
+
+
 def service_with_adapter(session, adapter: RecordingAdapter) -> ReportGenerationService:
     return ReportGenerationService(session, chat_provider=fixture_chat_provider(), adapters={"fixture": adapter})
 
@@ -108,6 +113,7 @@ def test_generate_report_fails_cleanly_without_processed_document(session):
     assert result.status == ReportStatus.failed.value
     report = session.get(Report, result.report_id)
     assert "No processed document" in report.error_message
+    assert "No processed document" in result.error_message
 
 
 def test_fixture_llm_generates_report_and_persists_evidence(session):
@@ -184,6 +190,7 @@ def test_generate_reading_report_fails_without_ready_processed_document(session)
 
     assert result.status == ReportStatus.failed.value
     assert "No ready processed document" in session.get(Report, result.report_id).error_message
+    assert "No ready processed document" in result.error_message
 
 
 def test_generate_reading_report_uses_processed_body_and_records_metadata(session):
@@ -207,6 +214,19 @@ def test_generate_reading_report_uses_processed_body_and_records_metadata(sessio
     assert "Language: English. Focus on methods." in final_prompt
     assert DEFAULT_ANALYSIS_INSTRUCTIONS in final_prompt
     assert "retrieval evidence alpha" not in final_prompt
+
+
+def test_generate_reading_report_returns_error_message_when_llm_fails(session):
+    paper, _, _ = create_processed_paper(session)
+    paper.title = "A Survey of Multi-Agent Collaboration"
+
+    result = service_with_adapter(session, FailingAdapter()).generate_reading_report(paper.id, output_language="English")
+
+    report = session.get(Report, result.report_id)
+    assert result.status == ReportStatus.failed.value
+    assert result.error_message == "Request timed out."
+    assert report.error_message == "Request timed out."
+    assert result.json_content == {"error": "Request timed out."}
 
 
 def test_generate_reading_report_reconstructs_sections_without_references(session):
@@ -333,4 +353,5 @@ def test_validation_failure_after_regeneration_persists_failed_report(session):
     report = session.get(Report, result.report_id)
     assert result.status == ReportStatus.failed.value
     assert "validation failed" in report.error_message
+    assert "validation failed" in result.error_message
     assert report.metadata_json["regeneration"] == {"attempted": True, "used": False}

@@ -1042,10 +1042,17 @@ button:focus-visible {
   padding: 0.18rem 0.45rem;
 }
 
-.thread-card__actions {
+.thread-card__actions,
+.card-actions {
   display: flex;
   justify-content: flex-end;
   margin-top: 0.65rem;
+}
+
+.reader-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
 }
 
 .ghost-danger-button {

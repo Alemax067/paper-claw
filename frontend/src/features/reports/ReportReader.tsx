@@ -9,9 +9,10 @@ import { useAsyncResource } from '../../hooks/useAsyncResource';
 interface ReportReaderProps {
   reportId: number | null;
   onSelectPaper: (paperId: number) => void;
+  onDeleteReport: (reportId: number) => Promise<void> | void;
 }
 
-export function ReportReader({ reportId, onSelectPaper }: ReportReaderProps) {
+export function ReportReader({ reportId, onSelectPaper, onDeleteReport }: ReportReaderProps) {
   const loader = useCallback(async () => {
     if (reportId == null) {
       return null;
@@ -40,9 +41,14 @@ export function ReportReader({ reportId, onSelectPaper }: ReportReaderProps) {
               <span>{report.report_type}</span>
               <span>{report.source_scope}</span>
             </div>
-            {report.paper_id && (
-              <button className="secondary-button" onClick={() => onSelectPaper(report.paper_id!)}>Open linked paper</button>
-            )}
+            <div className="reader-actions">
+              {report.paper_id && (
+                <button className="secondary-button" type="button" onClick={() => onSelectPaper(report.paper_id!)}>Open linked paper</button>
+              )}
+              <button className="ghost-danger-button" type="button" onClick={() => void onDeleteReport(report.id)}>
+                Delete report
+              </button>
+            </div>
             <div className="report-content">{report.markdown_content || 'No markdown content.'}</div>
             <div className="stack">
               <h3>Evidence</h3>

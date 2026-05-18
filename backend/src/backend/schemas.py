@@ -79,6 +79,7 @@ class ReportGenerationResult(BaseModel):
     status: str
     markdown_content: str | None = None
     json_content: dict[str, Any] | None = None
+    error_message: str | None = None
     evidence_ids: list[int] = Field(default_factory=list)
 
 

@@ -153,3 +153,12 @@ def get_report(report_id: int, session: Session = Depends(get_db_session)) -> Re
     if report is None:
         raise HTTPException(status_code=404, detail="Report not found")
     return report_read(report)
+
+
+@router.delete("/reports/{report_id}", status_code=204)
+def delete_report(report_id: int, session: Session = Depends(get_db_session)) -> None:
+    report = session.get(Report, report_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="Report not found")
+    session.delete(report)
+    session.commit()

@@ -21,6 +21,7 @@ export function App() {
   const [activeRun, setActiveRun] = useState<RunRead | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
   const [globalError, setGlobalError] = useState<string | null>(null);
+  const [reportError, setReportError] = useState<string | null>(null);
 
   useEffect(() => {
     storeNumber('paper-claw:selected-thread-id', selectedThreadId);
@@ -34,6 +35,20 @@ export function App() {
   const onRunUpdated = useCallback((run: RunRead | null) => {
     setActiveRun(run);
   }, []);
+
+  const deleteReport = useCallback(async (reportId: number) => {
+    if (!window.confirm('Delete this report permanently?')) {
+      return;
+    }
+    try {
+      await api.deleteReport(reportId);
+      setSelectedReportId((current) => (current === reportId ? null : current));
+      requestRefresh();
+      setReportError(null);
+    } catch (error) {
+      setReportError(error instanceof Error ? error.message : 'Failed to delete report');
+    }
+  }, [requestRefresh]);
 
   const searchSessionIds = useMemo(() => {
     const ids = new Set<number>();
@@ -103,7 +118,7 @@ export function App() {
       return (
         <div className="split-page report-page">
           <aside className="section-sidebar">
-            <ReportIndex selectedReportId={selectedReportId} refreshToken={refreshToken} onSelectReport={setSelectedReportId} />
+            <ReportIndex selectedReportId={selectedReportId} refreshToken={refreshToken} errorMessage={reportError} onSelectReport={setSelectedReportId} onDeleteReport={deleteReport} />
           </aside>
           <main className="workspace-main">
             <ReportReader
@@ -113,6 +128,7 @@ export function App() {
                 setActivePaperId(paperId);
                 setActivePage('paper');
               }}
+              onDeleteReport={deleteReport}
             />
           </main>
         </div>

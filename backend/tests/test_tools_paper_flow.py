@@ -3,12 +3,13 @@ from __future__ import annotations
 from datetime import datetime
 from types import SimpleNamespace
 
+import pytest
 from sqlalchemy.orm import sessionmaker
 
-from backend.db.models import AgentRun, AgentRunEvent, Paper, PaperIdentifier, PaperSourceRecord, Thread
+from backend.db.models import AgentRun, AgentRunEvent, Paper, PaperIdentifier, PaperSourceRecord, Report, Thread
 from backend.db.repositories import ParsingRepository
 from backend.db.types import ProcessedDocumentStatus, RunStatus, WorkflowName
-from backend.schemas import PaperClawContext, ResolvedProviderConfig
+from backend.schemas import PaperClawContext, ReportGenerationResult, ResolvedProviderConfig
 from backend.tools import DISCOVERY_AGENT_TOOLS, EVIDENCE_AGENT_TOOLS, INGESTION_AGENT_TOOLS, MAIN_AGENT_TOOLS, PAPER_CLAW_TOOLS, REPORT_AGENT_TOOLS
 from backend.tools.context import set_tool_session_factory, tool_runtime_context
 from backend.tools.paper_parsing import ingest_paper_document
@@ -244,6 +245,40 @@ def test_ingest_paper_document_processes_after_successful_parse(session, engine,
 
 
 
+def test_generate_paper_report_returns_error_message_on_failure(session, engine, monkeypatch):
+    class FailingReportService:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def generate_reading_report(self, paper_id, **kwargs):
+            report = Report(paper_id=paper_id, title="Failed report", status="failed", report_type="paper_summary", source_scope="full_document", error_message="Request timed out.")
+            session.add(report)
+            session.flush()
+            return ReportGenerationResult(report_id=report.id, status="failed", json_content={"error": "Request timed out."}, error_message="Request timed out.")
+
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    thread = Thread(title="Report thread")
+    paper = Paper(title="Timeout Paper")
+    session.add_all([thread, paper])
+    session.flush()
+    run = AgentRun(workflow=WorkflowName.paper_qa.value, thread_id=thread.id, status=RunStatus.running.value)
+    session.add(run)
+    session.commit()
+    monkeypatch.setattr("backend.tools.paper_reports.ReportGenerationService", FailingReportService)
+    set_tool_session_factory(factory)
+    try:
+        with tool_runtime_context(PaperClawContext(thread_id=thread.id, run_id=run.id)):
+            with pytest.raises(RuntimeError, match="Request timed out"):
+                generate_paper_report.invoke({"paper_id": paper.id, "orchestrator_instruction": "Language: English", "output_language": "English"})
+    finally:
+        set_tool_session_factory(None)
+
+    events = session.query(AgentRunEvent).filter_by(run_id=run.id).order_by(AgentRunEvent.sequence).all()
+    assert [event.event_type for event in events] == ["report_generation_started", "report_generation_failed"]
+    assert events[-1].level == "error"
+    assert events[-1].payload_json["error_message"] == "Request timed out."
+
+
 def test_tools_can_be_invoked_directly(session, engine, monkeypatch):
     monkeypatch.setattr(
         "backend.services.embeddings.embedding_provider_from_settings",
@@ -254,8 +289,12 @@ def test_tools_can_be_invoked_directly(session, engine, monkeypatch):
         lambda: ResolvedProviderConfig(id=0, name="fixture-chat", kind="chat", provider="fixture", model="fixture", settings={"title": "Tool Report"}),
     )
     factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    thread = Thread(title="Tool thread")
     paper = Paper(title="Tool Paper")
-    session.add(paper)
+    session.add_all([thread, paper])
+    session.flush()
+    run = AgentRun(workflow=WorkflowName.paper_qa.value, thread_id=thread.id, status=RunStatus.running.value)
+    session.add(run)
     session.flush()
     repo = ParsingRepository(session)
     job = repo.create_parse_job(paper.id, status="succeeded", strategy="fixture")
@@ -267,7 +306,8 @@ def test_tools_can_be_invoked_directly(session, engine, monkeypatch):
     try:
         paper_result = get_paper.invoke({"paper_id": paper.id})
         retrieval_result = retrieve_paper_evidence.invoke({"paper_id": paper.id, "query": "retrieval"})
-        report_result = generate_paper_report.invoke({"paper_id": paper.id, "orchestrator_instruction": "Language: English. Focus on retrieval.", "output_language": "English"})
+        with tool_runtime_context(PaperClawContext(thread_id=thread.id, run_id=run.id)):
+            report_result = generate_paper_report.invoke({"paper_id": paper.id, "orchestrator_instruction": "Language: English. Focus on retrieval.", "output_language": "English"})
     finally:
         set_tool_session_factory(None)
 
@@ -276,3 +316,6 @@ def test_tools_can_be_invoked_directly(session, engine, monkeypatch):
     assert report_result["status"] == "succeeded"
     assert report_result["json_content"]["context_strategy"] == "full_body"
     assert report_result["json_content"]["validation_passed"] is True
+    events = session.query(AgentRunEvent).filter_by(run_id=run.id).order_by(AgentRunEvent.sequence).all()
+    assert [event.event_type for event in events] == ["report_generation_started", "report_generation_succeeded"]
+    assert events[-1].payload_json["report_id"] == report_result["report_id"]
