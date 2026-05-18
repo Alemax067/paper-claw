@@ -102,6 +102,7 @@ class TexSourceParser:
                     "used_files": state.used_files,
                     "missing_includes": state.missing_includes,
                     "references_count": len(references),
+                    "references": references,
                 },
                 quality_summary=f"Parsed TeX source from {_relative_path(main_tex, source_root)} with {len(state.used_files)} source files and {len(references)} references.",
                 warnings=state.warnings,

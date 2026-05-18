@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from langchain.agents.middleware import ModelRequest, ModelResponse, wrap_model_call
-from langchain.chat_models import init_chat_model
 from langchain_core.messages import SystemMessage
+from langchain_openai import ChatOpenAI
 
 from backend.schemas import PaperClawContext
 from backend.settings import REPO_ROOT
@@ -22,8 +22,8 @@ def runtime_model(request: ModelRequest):
     if not isinstance(context, PaperClawContext) or not context.model or not context.model.strip():
         return None
     _install_openai_payload_logger()
-    return init_chat_model(
-        context.model,
+    return ChatOpenAI(
+        model=context.model,
         api_key=context.api_key,
         base_url=context.base_url,
         temperature=context.temperature,

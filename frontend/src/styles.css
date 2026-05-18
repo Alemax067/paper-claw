@@ -528,13 +528,15 @@ button:disabled {
   padding: 0.08rem 0.4rem;
 }
 
-.chunk-card p {
+.chunk-content {
   margin: 0;
   padding: 0 0.65rem 0.65rem;
   color: #312c23;
-  font-size: 0.78rem;
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
   line-height: 1.55;
   white-space: pre-wrap;
+  word-break: break-word;
 }
 
 @media (max-width: 980px) {

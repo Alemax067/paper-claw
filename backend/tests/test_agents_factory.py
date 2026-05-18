@@ -132,11 +132,11 @@ def test_tool_middleware_binds_runtime_context():
 def test_model_middleware_forwards_runtime_context(monkeypatch):
     calls = []
 
-    def fake_init_chat_model(*args, **kwargs):
-        calls.append((args, kwargs))
-        return "model-instance"
+    class FakeChatOpenAI:
+        def __init__(self, **kwargs):
+            calls.append(kwargs)
 
-    monkeypatch.setattr("backend.agents.model.init_chat_model", fake_init_chat_model)
+    monkeypatch.setattr("backend.agents.model.ChatOpenAI", FakeChatOpenAI)
     request = SimpleNamespace(
         runtime=SimpleNamespace(
             context=PaperClawContext(
@@ -155,9 +155,9 @@ def test_model_middleware_forwards_runtime_context(monkeypatch):
 
     apply_runtime_model(request)
 
-    assert request.model == "model-instance"
-    assert calls[0][0] == ("openai:gpt-4o-mini",)
-    assert calls[0][1] == {
+    assert isinstance(request.model, FakeChatOpenAI)
+    assert calls[0] == {
+        "model": "openai:gpt-4o-mini",
         "api_key": "key",
         "base_url": "https://example.test/v1",
         "temperature": 0.3,

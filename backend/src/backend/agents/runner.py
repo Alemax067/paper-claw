@@ -447,13 +447,13 @@ def _agent_context(prepared: PreparedAgentRun, request: AgentMessageRequest) -> 
     settings = get_settings()
     if request.model is not None:
         model = request.model
-        api_key = request.api_key
-        base_url = request.base_url
-        temperature = request.temperature
-        max_tokens = request.max_tokens
-        timeout = request.timeout
-        max_retries = request.max_retries
-        provider_name = request.chat_provider_name
+        api_key = request.api_key or settings.chat_api_key
+        base_url = request.base_url or settings.chat_base_url
+        temperature = request.temperature if request.temperature != 0.2 else settings.chat_temperature
+        max_tokens = request.max_tokens if request.max_tokens != 4096 else settings.chat_max_tokens
+        timeout = request.timeout if request.timeout != 60 else settings.chat_timeout_seconds
+        max_retries = request.max_retries if request.max_retries != 2 else settings.chat_max_retries
+        provider_name = request.chat_provider_name or "settings-chat"
     else:
         model = settings.chat_model
         api_key = request.api_key or settings.chat_api_key

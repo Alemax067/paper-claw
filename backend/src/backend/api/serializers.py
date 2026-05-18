@@ -153,6 +153,8 @@ def paper_detail(paper: Paper) -> PaperDetail:
                 "status": doc.status,
                 "quality_status": doc.quality_status,
                 "quality_summary": doc.quality_summary,
+                "processing_profile": doc.processing_profile,
+                "metadata": doc.metadata_json or {},
                 "content_markdown": doc.content_markdown,
                 "chunks": [
                     {
@@ -165,6 +167,7 @@ def paper_detail(paper: Paper) -> PaperDetail:
                         "page_start": chunk.page_start,
                         "page_end": chunk.page_end,
                         "token_estimate": chunk.token_estimate,
+                        "metadata": chunk.metadata_json or {},
                         "content_text": chunk.content_text,
                     }
                     for chunk in sorted(doc.chunks, key=lambda item: item.chunk_index)

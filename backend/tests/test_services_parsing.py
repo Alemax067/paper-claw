@@ -104,6 +104,9 @@ def test_tex_source_parser_expands_includes_and_bibliography(tmp_path):
     assert "A Referenced Paper" in payload.markdown_content
     assert payload.json_content["used_files"] == ["main.tex", "sections/intro.tex"]
     assert payload.json_content["references_count"] == 1
+    assert len(payload.json_content["references"]) == 1
+    assert "A Referenced Paper" in payload.json_content["references"][0]
+    assert "10.1000/test" in payload.json_content["references"][0]
 
 
 def test_tex_source_parser_preserves_sections_after_display_math_and_layout_envs(tmp_path):

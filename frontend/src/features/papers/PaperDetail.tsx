@@ -206,7 +206,7 @@ function ChunkList({ chunks, selectedIndex, onSelect }: { chunks: DossierRecord[
           {typeof selectedChunk.role === 'string' && <span className="chunk-role">{selectedChunk.role}</span>}
           {selectedChunk.token_estimate != null && <span className="chunk-tokens">{String(selectedChunk.token_estimate)} tok</span>}
         </div>
-        <p>{content || 'Empty chunk content'}</p>
+        <pre className="chunk-content">{content || 'Empty chunk content'}</pre>
       </article>
     </div>
   );
