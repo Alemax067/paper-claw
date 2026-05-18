@@ -112,13 +112,13 @@ def _install_openai_payload_logger() -> None:
 
     def logged_get_request_payload(self: Any, input_: Any, *, stop: list[str] | None = None, **kwargs: Any) -> dict[str, Any]:
         payload = original_get_request_payload(self, input_, stop=stop, **kwargs)
-        _append_model_call_log(
-            {
-                "event": "openai_request_payload",
-                "model": _model_name(self),
-                "payload": _redact_payload(payload),
-            }
-        )
+        # _append_model_call_log(
+        #     {
+        #         "event": "openai_request_payload",
+        #         "model": _model_name(self),
+        #         "payload": _redact_payload(payload),
+        #     }
+        # )
         return payload
 
     BaseChatOpenAI._get_request_payload = logged_get_request_payload
