@@ -198,6 +198,32 @@ def test_download_arxiv_artifacts_falls_back_to_pdf_when_source_fails(session, t
     assert session.query(PaperArtifact).one().role == PaperArtifactRole.pdf.value
 
 
+def test_download_arxiv_artifacts_ignores_pdf_returned_from_source_endpoint(session, tmp_path):
+    paper = Paper(title="arXiv source endpoint PDF")
+    session.add(paper)
+    session.commit()
+    storage_service = make_storage_service(session, tmp_path)
+
+    def download_source(_arxiv_id: str, destination: Path) -> Path:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"%PDF-fixture")
+        return destination
+
+    def download_pdf(_pdf_url: str, destination: Path) -> Path:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"%PDF-fixture")
+        return destination
+
+    client = SimpleNamespace(download_source=download_source, download_pdf=download_pdf)
+
+    job = AcquisitionService(session, storage_service).download_arxiv_artifacts(paper.id, "2401.00001", client)
+
+    assert job.status == RunStatus.partial.value
+    assert job.result_json["next_step"] == "parse_pdf"
+    assert job.result_json["source_error"] == "arXiv source archive is unavailable"
+    assert {link.role for link in session.query(PaperArtifact).all()} == {PaperArtifactRole.pdf.value}
+
+
 def test_mark_waiting_for_upload_records_reason(session, tmp_path):
     paper = Paper(title="Needs manual artifact")
     session.add(paper)

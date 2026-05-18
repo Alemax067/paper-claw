@@ -111,8 +111,12 @@ class AcquisitionService:
         pdf_error = None
         try:
             source_path = client.download_source(normalized_id, self.storage_service.storage.paper_file_path(paper.id, f"source/{normalized_id}.tar.gz"))
-            source_artifact = self.storage_service.register_source_artifact(paper.id, source_path, original_filename=f"{normalized_id}.tar.gz")
-            source_result = {"artifact_id": source_artifact.id, "storage_uri": source_artifact.storage_uri}
+            if _is_pdf_file(source_path):
+                source_path.unlink(missing_ok=True)
+                source_error = "arXiv source archive is unavailable"
+            else:
+                source_artifact = self.storage_service.register_source_artifact(paper.id, source_path, original_filename=f"{normalized_id}.tar.gz")
+                source_result = {"artifact_id": source_artifact.id, "storage_uri": source_artifact.storage_uri}
         except Exception as exc:
             source_error = str(exc)
         pdf_url = f"https://arxiv.org/pdf/{normalized_id}"
@@ -170,6 +174,11 @@ class AcquisitionService:
             )
             .order_by(PaperArtifact.is_primary.desc(), Artifact.created_at.desc())
         )
+
+
+def _is_pdf_file(path: Path) -> bool:
+    with path.open("rb") as handle:
+        return handle.read(5).startswith(b"%PDF-")
 
 
 def safe_pdf_downloader(url: str, destination: Path) -> Path:
