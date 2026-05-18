@@ -10,6 +10,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from backend.agents.checkpointing import _psycopg_connection_string
 from backend.agents.main_agent import create_paper_claw_agent
 from backend.agents.model import _json_safe, _messages_with_active_paper_info, apply_runtime_model
+from backend.agents.prompts import PAPER_CLAW_SYSTEM_PROMPT
 from backend.agents.subagents import create_paper_claw_subagents
 from backend.agents.tool_events import record_tool_event_call
 from backend.schemas import PaperClawContext
@@ -73,6 +74,41 @@ def test_ingestion_prompt_prepares_artifacts_and_processes_documents():
     assert "waiting_for_user_upload" in subagent["system_prompt"]
     assert "parse_failed" in subagent["system_prompt"]
     assert "processing_failed" in subagent["system_prompt"]
+
+
+def test_main_prompt_routes_reports_only_for_explicit_reading_reports():
+    assert "own all routing decisions" in PAPER_CLAW_SYSTEM_PROMPT
+    assert "only when the user explicitly asks to generate a persisted reading report" in PAPER_CLAW_SYSTEM_PROMPT
+    assert "Do not use the report specialist for ordinary paper QA" in PAPER_CLAW_SYSTEM_PROMPT
+    assert "multiple times with decomposed subquestions" in PAPER_CLAW_SYSTEM_PROMPT
+    assert "answer the user yourself using only returned evidence" in PAPER_CLAW_SYSTEM_PROMPT
+    assert "output language matching the user's language" in PAPER_CLAW_SYSTEM_PROMPT
+
+
+def test_evidence_prompt_requires_multi_retrieval_structured_pack():
+    subagent = create_paper_claw_subagents()[2]
+    prompt = subagent["system_prompt"]
+
+    assert "Decompose complex questions" in prompt
+    assert "retrieve_paper_evidence multiple times" in prompt
+    assert "Deduplicate by chunk_id" in prompt
+    assert "rerank" in prompt
+    assert "structured evidence pack" in prompt
+    assert "strength direct/indirect/contextual/weak" in prompt
+    assert "Do not write the final user-facing answer" in prompt
+
+
+def test_report_prompt_prepares_and_validates_service_generation():
+    subagent = create_paper_claw_subagents()[3]
+    prompt = subagent["system_prompt"]
+
+    assert "explicit reading report generation requests" in prompt
+    assert "Call get_paper_pipeline_status before generation" in prompt
+    assert "no processed cleaned body is ready" in prompt
+    assert "Do not manually write report markdown" in prompt
+    assert "Call generate_paper_report with the orchestrator instruction" in prompt
+    assert "output language matching the user's language" in prompt
+    assert "validation metadata" in prompt
 
 
 def test_agent_factory_constructs_without_external_model_call():

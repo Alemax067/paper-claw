@@ -267,10 +267,12 @@ def test_tools_can_be_invoked_directly(session, engine, monkeypatch):
     try:
         paper_result = get_paper.invoke({"paper_id": paper.id})
         retrieval_result = retrieve_paper_evidence.invoke({"paper_id": paper.id, "query": "retrieval"})
-        report_result = generate_paper_report.invoke({"paper_id": paper.id, "instructions": "retrieval"})
+        report_result = generate_paper_report.invoke({"paper_id": paper.id, "orchestrator_instruction": "Language: English. Focus on retrieval.", "output_language": "English"})
     finally:
         set_tool_session_factory(None)
 
     assert paper_result["title"] == "Tool Paper"
     assert retrieval_result["chunks"][0]["content"] == "retrieval evidence"
     assert report_result["status"] == "succeeded"
+    assert report_result["json_content"]["context_strategy"] == "full_body"
+    assert report_result["json_content"]["validation_passed"] is True

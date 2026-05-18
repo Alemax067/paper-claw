@@ -7,7 +7,12 @@ from backend.db.repositories import ParsingRepository
 from backend.db.types import ProcessedDocumentStatus, ReportSourceScope, ReportStatus, SectionRole
 from backend.integrations.llm.openai_compatible import OpenAICompatibleChatModelAdapter
 from backend.schemas import ResolvedProviderConfig
-from backend.services.reports import ReportGenerationService
+from backend.services.reports import (
+    COMPRESSED_REMAINDER_START,
+    DEFAULT_ANALYSIS_INSTRUCTIONS,
+    DEFAULT_REVIEW_ANALYSIS_INSTRUCTIONS,
+    ReportGenerationService,
+)
 
 
 def fixture_chat_provider() -> ResolvedProviderConfig:
@@ -23,6 +28,53 @@ def fixture_chat_provider() -> ResolvedProviderConfig:
 
 def report_service(session) -> ReportGenerationService:
     return ReportGenerationService(session, chat_provider=fixture_chat_provider())
+
+
+VALID_REGULAR_REPORT = """# Reading Report
+
+## Part I: Story & Method
+
+This is a sufficiently detailed regular paper report with method discussion and critique. It explains the research background, the concrete problem, the proposed approach, and the methodological intuition. It distinguishes paper content from critique and includes enough detail to pass a reading-report quality check.
+
+## Part II: Experiments & Findings
+
+This section discusses experiments, findings, baselines, metrics, ablations, and limitations in enough detail. It describes how evidence supports or weakens the paper's claims, identifies missing robustness checks when relevant, and avoids inventing datasets or numerical results beyond the supplied paper body.
+
+## Part III: Summary & Critique
+
+This section summarizes contributions, critiques evidence quality, and suggests follow-up research directions. It includes a higher-level assessment, discusses possible overclaims, and explains how the work could inspire future research while remaining grounded in the supplied content.
+"""
+
+VALID_REVIEW_REPORT = """# Review Report
+
+## Part I: Scope & Structure
+
+This section discusses the field scope, taxonomy, review methodology, and coverage quality. It explains the boundaries of the surveyed area, the organizing principles used by the authors, and the evidence from taxonomy figures, section headings, or comparison matrices where available.
+
+## Part II: Comparative Insights
+
+This section compares method families, evidence trends, emerging themes, and gaps. It synthesizes tradeoffs across categories, identifies recurring benchmarks or evaluation issues, and separates well-supported trends from speculative field-level claims.
+
+## Part III: Overall Assessment
+
+This section assesses the review, its limitations, and actionable follow-up reading. It identifies useful frameworks, coverage weaknesses, missing areas, and natural next steps for researchers who want to validate empirical claims by reading original papers.
+"""
+
+
+class RecordingAdapter:
+    def __init__(self, responses: list[str] | None = None) -> None:
+        self.responses = responses or [VALID_REGULAR_REPORT]
+        self.messages: list[list[dict]] = []
+
+    def generate_text(self, provider: ResolvedProviderConfig, messages: list[dict]) -> str:
+        self.messages.append(messages)
+        if len(self.responses) > 1:
+            return self.responses.pop(0)
+        return self.responses[0]
+
+
+def service_with_adapter(session, adapter: RecordingAdapter) -> ReportGenerationService:
+    return ReportGenerationService(session, chat_provider=fixture_chat_provider(), adapters={"fixture": adapter})
 
 
 def create_processed_paper(session):
@@ -112,3 +164,164 @@ def test_openai_compatible_chat_adapter_uses_injected_client():
     assert text == "model output"
     assert calls[0]["model"] == "model"
     assert calls[0]["max_tokens"] == 100
+
+
+def test_generate_reading_report_fails_without_ready_processed_document(session):
+    paper = Paper(title="Unprocessed")
+    session.add(paper)
+    session.commit()
+
+    result = report_service(session).generate_reading_report(paper.id, output_language="English")
+
+    assert result.status == ReportStatus.failed.value
+    assert "No ready processed document" in session.get(Report, result.report_id).error_message
+
+
+def test_generate_reading_report_uses_processed_body_and_records_metadata(session):
+    paper, processed, _ = create_processed_paper(session)
+    adapter = RecordingAdapter(["{\"type\":\"regular\",\"confidence\":0.9,\"reason\":\"method paper\"}", VALID_REGULAR_REPORT])
+
+    result = service_with_adapter(session, adapter).generate_reading_report(
+        paper.id,
+        orchestrator_instruction="Language: English. Focus on methods.",
+        output_language="English",
+    )
+
+    report = session.get(Report, result.report_id)
+    assert result.status == ReportStatus.succeeded.value
+    assert report.processed_document_id == processed.id
+    assert report.metadata_json["processed_document"]["body_source"] == "processed.content_text"
+    assert report.metadata_json["context_strategy"] == "full_body"
+    assert report.metadata_json["validation"]["passed"] is True
+    assert report.json_content["instruction_type"] == "regular"
+    final_prompt = adapter.messages[-1][1]["content"]
+    assert "Language: English. Focus on methods." in final_prompt
+    assert DEFAULT_ANALYSIS_INSTRUCTIONS in final_prompt
+    assert "retrieval evidence alpha" not in final_prompt
+
+
+def test_generate_reading_report_reconstructs_sections_without_references(session):
+    paper, processed, _ = create_processed_paper(session)
+    processed.content_text = None
+    repo = ParsingRepository(session)
+    repo.add_section(processed.id, 1, role=SectionRole.body.value, cleaned_text="Body section text")
+    repo.add_section(processed.id, 2, role=SectionRole.reference.value, cleaned_text="Reference section text")
+    session.commit()
+    adapter = RecordingAdapter(["{\"type\":\"regular\",\"confidence\":0.9,\"reason\":\"method paper\"}", VALID_REGULAR_REPORT])
+
+    result = service_with_adapter(session, adapter).generate_reading_report(paper.id, output_language="English")
+
+    report = session.get(Report, result.report_id)
+    assert result.status == ReportStatus.succeeded.value
+    assert report.metadata_json["processed_document"]["body_source"] == "document_sections.cleaned_text"
+    final_prompt = adapter.messages[-1][1]["content"]
+    assert "Body section text" in final_prompt
+    assert "Reference section text" not in final_prompt
+
+
+def test_review_rule_selects_review_instructions(session):
+    paper, _, _ = create_processed_paper(session)
+    paper.title = "A Survey of Retrieval Augmented Generation"
+    paper.abstract = "We survey recent advances."
+    adapter = RecordingAdapter([VALID_REVIEW_REPORT])
+
+    result = service_with_adapter(session, adapter).generate_reading_report(paper.id, output_language="English")
+
+    report = session.get(Report, result.report_id)
+    assert result.status == ReportStatus.succeeded.value
+    assert report.json_content["instruction_type"] == "review_survey"
+    assert report.metadata_json["classification"]["source"] == "rule"
+    assert DEFAULT_REVIEW_ANALYSIS_INSTRUCTIONS in adapter.messages[-1][1]["content"]
+
+
+def test_classifier_fallback_selects_review_when_rule_does_not_match(session):
+    paper, _, _ = create_processed_paper(session)
+    paper.abstract = "This paper organizes prior work into several groups and compares their assumptions."
+    adapter = RecordingAdapter(["{\"type\":\"review_survey\",\"confidence\":0.91,\"reason\":\"broad literature synthesis\"}", VALID_REVIEW_REPORT])
+
+    result = service_with_adapter(session, adapter).generate_reading_report(paper.id, output_language="English")
+
+    report = session.get(Report, result.report_id)
+    assert result.status == ReportStatus.succeeded.value
+    assert report.json_content["instruction_type"] == "review_survey"
+    assert report.metadata_json["classification"]["source"] == "classifier"
+
+
+def test_weak_review_terms_fall_through_to_classifier(session):
+    paper, _, _ = create_processed_paper(session)
+    paper.title = "A Taxonomy of Failure Modes for Vision Models"
+    paper.abstract = "We provide an overview of observed errors and recent advances that motivate our benchmark."
+    adapter = RecordingAdapter(["{\"type\":\"regular\",\"confidence\":0.82,\"reason\":\"benchmark paper with taxonomy section\"}", VALID_REGULAR_REPORT])
+
+    result = service_with_adapter(session, adapter).generate_reading_report(paper.id, output_language="English")
+
+    report = session.get(Report, result.report_id)
+    assert result.status == ReportStatus.succeeded.value
+    assert report.json_content["instruction_type"] == "regular"
+    assert report.metadata_json["classification"]["source"] == "classifier"
+
+
+def test_invalid_classifier_defaults_to_regular(session):
+    paper, _, _ = create_processed_paper(session)
+    adapter = RecordingAdapter(["not json", VALID_REGULAR_REPORT])
+
+    result = service_with_adapter(session, adapter).generate_reading_report(paper.id, output_language="English")
+
+    report = session.get(Report, result.report_id)
+    assert result.status == ReportStatus.succeeded.value
+    assert report.json_content["instruction_type"] == "regular"
+    assert report.metadata_json["classification"]["source"] == "default"
+
+
+def test_large_body_uses_compressed_remainder(monkeypatch, session):
+    paper, processed, _ = create_processed_paper(session)
+    processed.content_text = "one two three four five six seven eight nine ten eleven twelve"
+    monkeypatch.setattr("backend.services.reports.FULL_BODY_TOKEN_LIMIT", 5)
+    monkeypatch.setattr("backend.services.reports.VERBATIM_PREFIX_TOKEN_LIMIT", 3)
+    monkeypatch.setattr("backend.services.reports.COMPRESSION_CHUNK_TOKEN_LIMIT", 4)
+    adapter = RecordingAdapter([
+        "{\"type\":\"regular\",\"confidence\":0.9,\"reason\":\"method paper\"}",
+        "compressed remainder",
+        "compressed remainder",
+        VALID_REGULAR_REPORT,
+    ])
+
+    result = service_with_adapter(session, adapter).generate_reading_report(paper.id, output_language="English")
+
+    report = session.get(Report, result.report_id)
+    assert result.status == ReportStatus.succeeded.value
+    assert report.metadata_json["context_strategy"] == "prefix_plus_compressed_remainder"
+    assert report.metadata_json["compression"]["used"] is True
+    assert COMPRESSED_REMAINDER_START in adapter.messages[-1][1]["content"]
+
+
+def test_validation_failure_regenerates_once(session):
+    paper, _, _ = create_processed_paper(session)
+    adapter = RecordingAdapter([
+        "{\"type\":\"regular\",\"confidence\":0.9,\"reason\":\"method paper\"}",
+        "too short",
+        VALID_REGULAR_REPORT,
+    ])
+
+    result = service_with_adapter(session, adapter).generate_reading_report(paper.id, output_language="English")
+
+    report = session.get(Report, result.report_id)
+    assert result.status == ReportStatus.succeeded.value
+    assert report.metadata_json["regeneration"] == {"attempted": True, "used": True}
+    assert len(report.metadata_json["validation_attempts"]) == 2
+
+
+def test_validation_failure_after_regeneration_persists_failed_report(session):
+    paper, _, _ = create_processed_paper(session)
+    adapter = RecordingAdapter([
+        "{\"type\":\"regular\",\"confidence\":0.9,\"reason\":\"method paper\"}",
+        "too short",
+        "still short",
+    ])
+
+    result = service_with_adapter(session, adapter).generate_reading_report(paper.id, output_language="English")
+
+    report = session.get(Report, result.report_id)
+    assert result.status == ReportStatus.failed.value
+    assert "validation failed" in report.error_message
+    assert report.metadata_json["regeneration"] == {"attempted": True, "used": False}
