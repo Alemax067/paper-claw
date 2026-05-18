@@ -1,15 +1,59 @@
 import { useCallback } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { api } from '../../api/client';
 import { EmptyState } from '../../components/EmptyState';
 import { ErrorBanner } from '../../components/ErrorBanner';
 import { LoadingBlock } from '../../components/LoadingBlock';
 import { StatusBadge } from '../../components/StatusBadge';
 import { useAsyncResource } from '../../hooks/useAsyncResource';
+import type { JsonObject, JsonValue } from '../../api/types';
 
 interface ReportReaderProps {
   reportId: number | null;
   onSelectPaper: (paperId: number) => void;
   onDeleteReport: (reportId: number) => Promise<void> | void;
+}
+
+function ReportProvenance({ jsonContent, sourceRefs }: { jsonContent: JsonObject | null; sourceRefs: unknown[] }) {
+  const items = [
+    ['Context', stringValue(jsonContent?.context_strategy)],
+    ['Instruction', stringValue(jsonContent?.instruction_type)],
+    ['Validation', jsonContent?.validation_passed === true ? 'passed' : jsonContent?.validation_passed === false ? 'failed' : null],
+    ['Regenerated', jsonContent?.regeneration_used === true ? 'yes' : jsonContent?.regeneration_used === false ? 'no' : null],
+    ['Sources', sourceRefs.length ? `${sourceRefs.length} linked source${sourceRefs.length === 1 ? '' : 's'}` : null],
+  ].filter((item): item is [string, string] => Boolean(item[1]));
+
+  if (!items.length && !sourceRefs.length) {
+    return null;
+  }
+
+  return (
+    <div className="report-provenance">
+      <div>
+        <p className="eyebrow">Generation record</p>
+        <h3>Full-document source trail</h3>
+      </div>
+      <div className="report-provenance-grid">
+        {items.map(([label, value]) => (
+          <div className="report-provenance-card" key={label}>
+            <span>{label}</span>
+            <strong>{value}</strong>
+          </div>
+        ))}
+      </div>
+      {sourceRefs.length > 0 && (
+        <details className="dossier-record">
+          <summary>Source references</summary>
+          <pre>{JSON.stringify(sourceRefs, null, 2)}</pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
+function stringValue(value: JsonValue | undefined): string | null {
+  return typeof value === 'string' && value.trim() ? value : null;
 }
 
 export function ReportReader({ reportId, onSelectPaper, onDeleteReport }: ReportReaderProps) {
@@ -34,7 +78,7 @@ export function ReportReader({ reportId, onSelectPaper, onDeleteReport }: Report
           <EmptyState title="Open a brief" body="Select a report from the evidence briefs index." />
         )}
         {report && (
-          <>
+          <div className="report-reader-layout">
             <div className="meta-row">
               <span>report #{report.id}</span>
               <StatusBadge status={report.status} />
@@ -49,18 +93,23 @@ export function ReportReader({ reportId, onSelectPaper, onDeleteReport }: Report
                 Delete report
               </button>
             </div>
-            <div className="report-content">{report.markdown_content || 'No markdown content.'}</div>
-            <div className="stack">
-              <h3>Evidence</h3>
-              {!report.evidence.length && <p className="meta-row">No evidence rows.</p>}
-              {report.evidence.map((item, index) => (
-                <details className="dossier-record" key={index}>
-                  <summary>{String(item.evidence_type ?? item.id ?? index + 1)}</summary>
-                  <pre>{JSON.stringify(item, null, 2)}</pre>
-                </details>
-              ))}
+            <div className="report-content markdown-message">
+              {report.markdown_content ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{report.markdown_content}</ReactMarkdown> : 'No markdown content.'}
             </div>
-          </>
+            {report.evidence.length ? (
+              <div className="stack">
+                <h3>Evidence</h3>
+                {report.evidence.map((item, index) => (
+                  <details className="dossier-record" key={index}>
+                    <summary>{String(item.evidence_type ?? item.id ?? index + 1)}</summary>
+                    <pre>{JSON.stringify(item, null, 2)}</pre>
+                  </details>
+                ))}
+              </div>
+            ) : (
+              <ReportProvenance jsonContent={report.json_content} sourceRefs={report.source_refs} />
+            )}
+          </div>
         )}
       </div>
     </section>
