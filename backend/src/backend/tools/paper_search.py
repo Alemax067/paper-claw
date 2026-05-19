@@ -169,6 +169,7 @@ def _record_search_candidates_event(
     candidates: list[dict],
 ) -> None:
     candidate_ids = [candidate["id"] for candidate in candidates]
+    candidate_refs = [candidate["candidate_ref"] for candidate in candidates]
     AgentRunRepository(session).append_event(
         run_id,
         "search_candidates_found" if candidate_ids else "search_candidates_not_found",
@@ -180,6 +181,7 @@ def _record_search_candidates_event(
             "query_used": query_used,
             "status": status,
             "candidate_count": len(candidate_ids),
+            "candidate_refs": candidate_refs,
             "candidate_ids": candidate_ids,
             "warnings": warnings,
         },

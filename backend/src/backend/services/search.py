@@ -45,7 +45,19 @@ class PaperSearchService:
             status=SearchStatus.waiting_for_confirmation.value,
             source_preference=f"{source}:{mode}",
         )
-        response = self._search_source(query, source=source, mode=mode, max_results=max_results, offset=offset)
+        try:
+            response = self._search_source(query, source=source, mode=mode, max_results=max_results, offset=offset)
+        except Exception as exc:
+            search_session.status = SearchStatus.failed.value
+            self.session.flush()
+            return PaperSearchExecution(
+                search_session=search_session,
+                source=source,
+                mode=mode,
+                query=query,
+                query_used=f"{source}:{mode}:{query}",
+                warnings=[f"{source} search failed: {exc}"],
+            )
         for rank, candidate in enumerate(_dedupe_candidates(response.results)[:max_results], start=1):
             self._add_candidate(search_session.id, rank, candidate)
         if not search_session.candidates:

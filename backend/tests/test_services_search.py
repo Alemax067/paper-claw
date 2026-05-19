@@ -17,6 +17,11 @@ class FakeSource:
         return PaperSourceSearchResponse(results=self.results, query_used=f"fake:{mode}:{query}", warnings=["fake-warning"])
 
 
+class FailingSource:
+    def search(self, query: str, max_results: int = 10, *, mode: str = "auto", offset: int = 0) -> PaperSourceSearchResponse:
+        raise RuntimeError("HTTP 429")
+
+
 def test_search_local_source_does_not_call_external_sources(session):
     session.add(Paper(title="Local RAG Paper", abstract="local"))
     session.commit()
@@ -66,6 +71,16 @@ def test_search_failed_when_selected_source_has_no_candidates(session):
 
     assert execution.search_session.status == SearchStatus.failed.value
     assert execution.search_session.candidates == []
+
+
+
+def test_search_external_source_error_returns_failed_execution(session):
+    execution = PaperSearchService(session, {"arxiv": FailingSource()}).search("Lightning OPD", source="arxiv", mode="keyword")
+
+    assert execution.search_session.status == SearchStatus.failed.value
+    assert execution.search_session.candidates == []
+    assert execution.query_used == "arxiv:keyword:Lightning OPD"
+    assert execution.warnings == ["arxiv search failed: HTTP 429"]
 
 
 def test_search_deduplicates_candidates_by_identifier_and_title(session):

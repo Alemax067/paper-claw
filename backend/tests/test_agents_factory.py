@@ -56,6 +56,10 @@ def test_discovery_prompt_returns_candidates_for_deterministic_confirmation():
 
     assert "Do not confirm, upsert, or claim that an external candidate is active" in prompt
     assert "call recommend_paper_candidates exactly once" in prompt
+    assert "looks like a full paper title" in prompt
+    assert "preserve the full title verbatim" in prompt
+    assert "even when it is not quoted" in prompt
+    assert "never shorten it to the acronym, prefix, or leading phrase" in prompt
     assert "full paper title plus an abbreviation" in prompt
     assert "search the full title first with title mode" in prompt
     assert "Use candidate_refs like candidate:65" in prompt
@@ -93,6 +97,9 @@ def test_main_prompt_routes_reports_only_for_explicit_reading_reports():
     assert "multiple times with decomposed subquestions" in PAPER_CLAW_SYSTEM_PROMPT
     assert "answer the user yourself using only returned evidence" in PAPER_CLAW_SYSTEM_PROMPT
     assert "output language matching the user's language" in PAPER_CLAW_SYSTEM_PROMPT
+    assert "looks like a full paper title" in PAPER_CLAW_SYSTEM_PROMPT
+    assert "even if it is not quoted" in PAPER_CLAW_SYSTEM_PROMPT
+    assert "do not shorten it to an acronym, prefix, or leading phrase" in PAPER_CLAW_SYSTEM_PROMPT
     assert "prefixed search candidate refs such as candidate:65" in PAPER_CLAW_SYSTEM_PROMPT
     assert "emit paper_candidates_recommended" in PAPER_CLAW_SYSTEM_PROMPT
     assert "Do not pass a candidate ref or bare search candidate id to get_paper" in PAPER_CLAW_SYSTEM_PROMPT

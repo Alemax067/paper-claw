@@ -54,7 +54,7 @@ class ArxivClient:
         self.backoff_base_seconds = backoff_base_seconds
         self.backoff_max_seconds = backoff_max_seconds
         self.sleep = sleep
-        self.arxiv_client = arxiv_client or arxiv.Client()
+        self.arxiv_client = arxiv_client or arxiv.Client(page_size=25, delay_seconds=limiter.min_interval_seconds if limiter is not None else 3.0, num_retries=0)
         self.http_client = http_client or httpx.Client(follow_redirects=True, timeout=timeout_seconds)
 
     def search(self, query: str, max_results: int = 10, *, mode: str = "auto", offset: int = 0) -> PaperSourceSearchResponse:
