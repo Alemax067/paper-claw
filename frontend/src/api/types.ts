@@ -184,15 +184,6 @@ export interface SearchSessionRead {
   candidates: SearchCandidateRead[];
 }
 
-export interface ConfirmSearchCandidateRequest {
-  candidate_id: number;
-  update_thread_focus: boolean;
-}
-
-export interface RejectSearchSessionRequest {
-  reason?: string | null;
-}
-
 export interface RunDecision {
   type: RunDecisionType;
   args?: Record<string, unknown> | null;

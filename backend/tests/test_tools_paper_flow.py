@@ -16,7 +16,7 @@ from backend.tools.paper_parsing import ingest_paper_document, parse_paper
 from backend.tools.paper_qa import retrieve_paper_evidence
 from backend.tools.paper_acquisition import download_arxiv_paper_artifacts
 from backend.tools.paper_reports import generate_paper_report
-from backend.tools.paper_search import get_paper, recommend_paper_candidates, search_papers
+from backend.tools.paper_search import confirm_paper_candidate, get_paper, search_papers
 from backend.tools.paper_status import get_paper_pipeline_status, list_paper_artifacts
 
 
@@ -30,8 +30,9 @@ def test_expected_tool_names_exist():
         "get_paper_pipeline_status",
         "list_paper_artifacts",
         "list_paper_reports",
+        "confirm_paper_candidate",
     }
-    assert {tool.name for tool in DISCOVERY_AGENT_TOOLS} == {"search_papers", "recommend_paper_candidates", "get_paper"}
+    assert {tool.name for tool in DISCOVERY_AGENT_TOOLS} == {"search_papers", "get_paper"}
     assert {tool.name for tool in INGESTION_AGENT_TOOLS} == {
         "get_paper_pipeline_status",
         "list_paper_artifacts",
@@ -82,7 +83,7 @@ def test_search_papers_returns_rich_local_candidate_payload(session, engine):
         set_tool_session_factory(None)
 
     assert result["source"] == "local"
-    assert result["candidates"][0]["candidate_ref"] == f"candidate:{result['candidates'][0]['id']}"
+    assert "candidate_ref" not in result["candidates"][0]
     assert result["candidates"][0]["title"] == "Recursive Multi-Agent Systems"
     assert result["candidates"][0]["venue"] == "arXiv"
 
@@ -138,76 +139,6 @@ def test_search_papers_records_candidate_found_event(session, engine):
 
 
 
-def test_recommend_paper_candidates_records_final_recommendation_event(session, engine):
-    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
-    thread = Thread(title="Search thread")
-    paper = Paper(title="Recursive Multi-Agent Systems", venue="arXiv", year=2024, authors_json=["A"])
-    session.add_all([thread, paper])
-    session.flush()
-    run = AgentRun(workflow=WorkflowName.paper_qa.value, thread_id=thread.id, status=RunStatus.running.value)
-    session.add(run)
-    session.commit()
-    set_tool_session_factory(factory)
-    try:
-        with tool_runtime_context(PaperClawContext(thread_id=thread.id, run_id=run.id)):
-            search_result = search_papers.invoke({"query": "Recursive Multi-Agent Systems", "source": "local", "mode": "title"})
-            result = recommend_paper_candidates.invoke(
-                {
-                    "search_session_id": search_result["search_session_id"],
-                    "candidate_refs": [search_result["candidates"][0]["candidate_ref"]],
-                    "reason": "Exact local title match",
-                }
-            )
-    finally:
-        set_tool_session_factory(None)
-
-    assert result["status"] == "candidate_found_unconfirmed"
-    assert result["candidate_refs"] == [search_result["candidates"][0]["candidate_ref"]]
-    event = session.query(AgentRunEvent).filter_by(run_id=run.id, event_type="paper_candidates_recommended").one()
-    assert event.payload_json["search_session_id"] == search_result["search_session_id"]
-    assert event.payload_json["candidate_refs"] == [search_result["candidates"][0]["candidate_ref"]]
-    assert event.payload_json["candidate_ids"] == [search_result["candidates"][0]["id"]]
-    assert event.payload_json["reason"] == "Exact local title match"
-
-
-
-def test_recommend_paper_candidates_returns_mismatch_error_without_raising(session, engine):
-    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
-    thread = Thread(title="Search thread")
-    session.add(thread)
-    session.flush()
-    run = AgentRun(workflow=WorkflowName.paper_qa.value, thread_id=thread.id, status=RunStatus.running.value)
-    first_session = SearchSession(thread_id=thread.id, run_id=run.id, query_text="TCOD", source_preference="arxiv", status=SearchStatus.waiting_for_confirmation.value)
-    second_session = SearchSession(thread_id=thread.id, run_id=run.id, query_text="TCOD", source_preference="openalex", status=SearchStatus.waiting_for_confirmation.value)
-    session.add_all([run, first_session, second_session])
-    session.flush()
-    created_at = datetime.now().astimezone()
-    first_candidate = SearchCandidate(search_session_id=first_session.id, rank=1, source="arxiv", title="Unrelated TCOD Paper", created_at=created_at)
-    second_candidate = SearchCandidate(search_session_id=second_session.id, rank=1, source="openalex", title="TCOD: Exploring Temporal Curriculum in On-Policy Distillation for Multi-turn Autonomous Agents", created_at=created_at)
-    session.add_all([first_candidate, second_candidate])
-    session.commit()
-    set_tool_session_factory(factory)
-    try:
-        with tool_runtime_context(PaperClawContext(thread_id=thread.id, run_id=run.id)):
-            result = recommend_paper_candidates.invoke(
-                {
-                    "search_session_id": first_session.id,
-                    "candidate_refs": [f"candidate:{second_candidate.id}"],
-                    "reason": "Best title match",
-                }
-            )
-    finally:
-        set_tool_session_factory(None)
-
-    assert result["status"] == "invalid_candidate_refs"
-    assert result["search_session_id"] == first_session.id
-    assert result["invalid_candidate_refs"] == [f"candidate:{second_candidate.id}"]
-    assert result["invalid_candidate_ids"] == [second_candidate.id]
-    assert result["candidate_session_hints"] == {f"candidate:{second_candidate.id}": second_session.id}
-    assert session.query(AgentRunEvent).filter_by(run_id=run.id, event_type="paper_candidate_recommendation_invalid").one()
-
-
-
 def test_search_papers_runtime_thread_overrides_model_thread_argument(session, engine):
     factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     thread = Thread(title="Search thread")
@@ -249,6 +180,34 @@ def test_search_papers_records_candidate_not_found_event(session, engine):
     assert event.payload_json["search_session_id"] == result["search_session_id"]
     assert event.payload_json["candidate_count"] == 0
     assert event.payload_json["candidate_ids"] == []
+
+
+
+def test_confirm_paper_candidate_returns_structured_error_for_mismatched_candidate(session, engine):
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    first_session = SearchSession(query_text="First query", status=SearchStatus.waiting_for_confirmation.value)
+    session.add(first_session)
+    other_session = SearchSession(query_text="Second query", status=SearchStatus.waiting_for_confirmation.value)
+    session.add(other_session)
+    session.flush()
+    candidate = SearchCandidate(search_session_id=other_session.id, rank=1, source="arxiv", title="Other Paper", created_at=datetime.now().astimezone())
+    session.add(candidate)
+    session.commit()
+    set_tool_session_factory(factory)
+    try:
+        result = confirm_paper_candidate.invoke({"search_session_id": first_session.id, "candidate_id": candidate.id})
+    finally:
+        set_tool_session_factory(None)
+
+    assert result == {
+        "status": "failed",
+        "search_session_id": first_session.id,
+        "selected_candidate_id": None,
+        "paper_id": None,
+        "thread_focus_paper_id": None,
+        "error": f"Candidate {candidate.id} does not belong to search session {first_session.id}.",
+        "action": "run_discovery_again",
+    }
 
 
 

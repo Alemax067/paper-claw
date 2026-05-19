@@ -11,7 +11,6 @@ import { MessageComposer } from './MessageComposer';
 import { RunDecisionPanel } from './RunDecisionPanel';
 import { MessageTranscript } from './MessageTranscript';
 import { AgentActivity } from './AgentActivity';
-import { SearchSessionDecisionPanel } from '../search/SearchSessionDecisionPanel';
 
 interface AgentPanelProps {
   selectedThreadId: number | null;
@@ -188,7 +187,6 @@ export function AgentPanel({
   };
 
   const threadRuns = currentRun ? mergeRuns(thread?.runs ?? [], currentRun) : thread?.runs ?? [];
-  const candidateRecommendations = useMemo(() => pendingCandidateRecommendations(currentRun), [currentRun]);
   const showRunDecision = currentRun?.status === 'waiting_for_user';
   const showCancelRun = Boolean(activeRunId && currentRun && cancellableRunStatuses.has(currentRun.status));
   const showRunActivity = Boolean(
@@ -220,20 +218,6 @@ export function AgentPanel({
             <RunDecisionPanel run={currentRun} onRefresh={onRefresh} />
           </div>
         )}
-        {candidateRecommendations.length > 0 && (
-          <div className="inline-decision-stack">
-            {candidateRecommendations.map((recommendation) => (
-              <SearchSessionDecisionPanel
-                key={recommendation.searchSessionId}
-                searchSessionId={recommendation.searchSessionId}
-                candidateIds={recommendation.candidateIds}
-                recommendationReason={recommendation.reason}
-                onRefresh={onRefresh}
-                onActivePaperSelected={onActivePaperSelected}
-              />
-            ))}
-          </div>
-        )}
         {showRunActivity && currentRun && (
           <article className="message message-assistant message-streaming">
             <div className="meta-row">
@@ -258,38 +242,6 @@ export function AgentPanel({
       </div>
     </section>
   );
-}
-
-interface CandidateRecommendation {
-  searchSessionId: number;
-  candidateIds: number[];
-  reason: string | null;
-}
-
-function pendingCandidateRecommendations(run: RunRead | null): CandidateRecommendation[] {
-  const finished = new Set<number>();
-  const recommendations = new Map<number, CandidateRecommendation>();
-  for (const event of run?.events ?? []) {
-    const value = event.payload.search_session_id;
-    if (typeof value !== 'number') {
-      continue;
-    }
-    if (event.event_type === 'search_candidate_confirmed' || event.event_type === 'search_session_rejected') {
-      finished.add(value);
-      continue;
-    }
-    if (event.event_type === 'paper_candidates_recommended') {
-      const ids = Array.isArray(event.payload.candidate_ids)
-        ? event.payload.candidate_ids.filter((candidateId): candidateId is number => typeof candidateId === 'number')
-        : [];
-      recommendations.set(value, {
-        searchSessionId: value,
-        candidateIds: ids,
-        reason: typeof event.payload.reason === 'string' ? event.payload.reason : null,
-      });
-    }
-  }
-  return [...recommendations.values()].filter((recommendation) => !finished.has(recommendation.searchSessionId));
 }
 
 function mergeRuns(runs: RunRead[], activeRun: RunRead): RunRead[] {

@@ -261,15 +261,6 @@ class SearchSessionRead(BaseModel):
     candidates: list[SearchCandidateRead] = Field(default_factory=list)
 
 
-class ConfirmSearchCandidateRequest(BaseModel):
-    candidate_id: int
-    update_thread_focus: bool = True
-
-
-class RejectSearchSessionRequest(BaseModel):
-    reason: str | None = None
-
-
 class RunDecision(BaseModel):
     type: Literal["approve", "edit", "reject", "respond"]
     args: dict[str, Any] | None = None

@@ -112,10 +112,6 @@ function eventLabel(event: RunEventRead): string {
       return `Tool failed${toolName(event)}`;
     case 'approval_decision':
       return 'Approval decision';
-    case 'search_candidate_confirmed':
-      return 'Search candidate confirmed';
-    case 'search_session_rejected':
-      return 'Search session rejected';
     case 'agent_run_cancelled':
       return 'Run cancelled';
     default:

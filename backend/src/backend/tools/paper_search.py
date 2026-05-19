@@ -4,7 +4,7 @@ from typing import Literal
 
 from langchain_core.tools import tool
 
-from backend.db.models import AgentRun, Paper, SearchCandidate, Thread
+from backend.db.models import AgentRun, Paper, Thread
 from backend.db.repositories import AgentRunRepository
 from backend.integrations.paper_sources import paper_source_adapters_from_settings
 from backend.services.search import PaperSearchService
@@ -67,84 +67,21 @@ def search_papers(
 
 
 @tool
-def recommend_paper_candidates(
-    search_session_id: int,
-    reason: str,
-    candidate_refs: list[str] | None = None,
-    candidate_ids: list[int] | None = None,
-    status: Literal["candidate_found_unconfirmed", "ambiguous"] = "candidate_found_unconfirmed",
-) -> dict:
-    """Record final search candidates and trigger the frontend confirmation picker."""
-    with tool_session() as session:
-        context = current_tool_context()
-        run_id = context.run_id if context is not None else None
-        if run_id is None:
-            return {"status": "skipped", "reason": "No active run context"}
-        if session.get(AgentRun, run_id) is None:
-            raise ValueError(f"Run {run_id} not found for paper recommendation context")
-        search_session = PaperSearchService(session).get_session(search_session_id)
-        if search_session is None:
-            raise ValueError(f"Search session {search_session_id} not found")
-        resolved_candidate_ids, invalid_candidate_refs = _resolve_candidate_refs(candidate_refs, candidate_ids)
-        session_candidate_ids = {candidate.id for candidate in search_session.candidates}
-        invalid_ids = [candidate_id for candidate_id in resolved_candidate_ids if candidate_id not in session_candidate_ids]
-        if invalid_candidate_refs or invalid_ids:
-            candidate_session_hints = {
-                _candidate_ref(candidate_id): candidate_search_session_id
-                for candidate_id, candidate_search_session_id in session.query(SearchCandidate.id, SearchCandidate.search_session_id)
-                .filter(SearchCandidate.id.in_(invalid_ids))
-                .all()
-            }
-            AgentRunRepository(session).append_event(
-                run_id,
-                "paper_candidate_recommendation_invalid",
-                level="warning",
-                payload_json={
-                    "search_session_id": search_session_id,
-                    "candidate_refs": [_candidate_ref(candidate_id) for candidate_id in resolved_candidate_ids],
-                    "candidate_ids": resolved_candidate_ids,
-                    "invalid_candidate_refs": invalid_candidate_refs + [_candidate_ref(candidate_id) for candidate_id in invalid_ids],
-                    "invalid_candidate_ids": invalid_ids,
-                    "candidate_session_hints": candidate_session_hints,
-                    "reason": reason,
-                },
-            )
-            return {
-                "status": "invalid_candidate_refs",
-                "search_session_id": search_session_id,
-                "candidate_refs": [_candidate_ref(candidate_id) for candidate_id in resolved_candidate_ids],
-                "candidate_ids": resolved_candidate_ids,
-                "invalid_candidate_refs": invalid_candidate_refs + [_candidate_ref(candidate_id) for candidate_id in invalid_ids],
-                "invalid_candidate_ids": invalid_ids,
-                "candidate_session_hints": candidate_session_hints,
-                "message": "Candidate refs must have the form candidate:<id> and belong to the same search_session_id. Retry with the hinted search_session_id for the chosen candidate refs.",
-            }
-        AgentRunRepository(session).append_event(
-            run_id,
-            "paper_candidates_recommended",
-            payload_json={
-                "search_session_id": search_session_id,
-                "candidate_refs": [_candidate_ref(candidate_id) for candidate_id in resolved_candidate_ids],
-                "candidate_ids": resolved_candidate_ids,
-                "candidate_count": len(resolved_candidate_ids),
-                "status": status,
-                "reason": reason,
-            },
-        )
-        return {
-            "status": status,
-            "search_session_id": search_session_id,
-            "candidate_refs": [_candidate_ref(candidate_id) for candidate_id in resolved_candidate_ids],
-            "candidate_ids": resolved_candidate_ids,
-            "reason": reason,
-        }
-
-
-@tool
 def confirm_paper_candidate(search_session_id: int, candidate_id: int, update_thread_focus: bool = True) -> dict:
     """Confirm a search candidate and upsert it into the paper catalog."""
     with tool_session() as session:
-        search_session = PaperSearchService(session).confirm_candidate(search_session_id, candidate_id, update_thread_focus=update_thread_focus)
+        try:
+            search_session = PaperSearchService(session).confirm_candidate(search_session_id, candidate_id, update_thread_focus=update_thread_focus)
+        except ValueError as exc:
+            return {
+                "status": "failed",
+                "search_session_id": search_session_id,
+                "selected_candidate_id": None,
+                "paper_id": None,
+                "thread_focus_paper_id": None,
+                "error": str(exc),
+                "action": "run_discovery_again",
+            }
         selected = session.get(Paper, search_session.selected_candidate.paper_id) if search_session.selected_candidate and search_session.selected_candidate.paper_id else None
         thread = session.get(Thread, search_session.thread_id) if search_session.thread_id is not None else None
         return {
@@ -169,7 +106,6 @@ def _record_search_candidates_event(
     candidates: list[dict],
 ) -> None:
     candidate_ids = [candidate["id"] for candidate in candidates]
-    candidate_refs = [candidate["candidate_ref"] for candidate in candidates]
     AgentRunRepository(session).append_event(
         run_id,
         "search_candidates_found" if candidate_ids else "search_candidates_not_found",
@@ -181,30 +117,11 @@ def _record_search_candidates_event(
             "query_used": query_used,
             "status": status,
             "candidate_count": len(candidate_ids),
-            "candidate_refs": candidate_refs,
             "candidate_ids": candidate_ids,
             "warnings": warnings,
         },
     )
 
-
-
-def _candidate_ref(candidate_id: int) -> str:
-    return f"candidate:{candidate_id}"
-
-
-def _resolve_candidate_refs(candidate_refs: list[str] | None, candidate_ids: list[int] | None) -> tuple[list[int], list[str]]:
-    if candidate_refs is None:
-        return list(candidate_ids or []), []
-    resolved: list[int] = []
-    invalid: list[str] = []
-    for candidate_ref in candidate_refs:
-        prefix, separator, raw_id = candidate_ref.partition(":")
-        if prefix != "candidate" or separator != ":" or not raw_id.isdecimal():
-            invalid.append(candidate_ref)
-            continue
-        resolved.append(int(raw_id))
-    return resolved, invalid
 
 
 def _candidate_payload(candidate) -> dict:
@@ -213,7 +130,6 @@ def _candidate_payload(candidate) -> dict:
     if isinstance(match_reasons, str):
         match_reasons = [match_reasons]
     return {
-        "candidate_ref": _candidate_ref(candidate.id),
         "id": candidate.id,
         "rank": candidate.rank,
         "source": candidate.source,

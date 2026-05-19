@@ -5,17 +5,14 @@ import type {
   AgentStreamEvent,
   ApprovalRequest,
   ArtifactRead,
-  ConfirmSearchCandidateRequest,
   PaperDetail,
   PaperSummary,
-  RejectSearchSessionRequest,
   ReportRead,
   ReportSummary,
   RunEventRead,
   RunRead,
   RuntimeSettingsRead,
   MemoryRead,
-  SearchSessionRead,
   ThreadDetail,
   ThreadSummary,
   UploadArtifactRequest,
@@ -128,18 +125,6 @@ export const api = {
 
   listPapers: () => requestJson<PaperSummary[]>('/api/papers'),
   getPaper: (paperId: number) => requestJson<PaperDetail>(`/api/papers/${paperId}`),
-
-  getSearchSession: (searchSessionId: number) => requestJson<SearchSessionRead>(`/api/search-sessions/${searchSessionId}`),
-  confirmSearchCandidate: (searchSessionId: number, request: ConfirmSearchCandidateRequest) =>
-    requestJson<SearchSessionRead>(`/api/search-sessions/${searchSessionId}/confirm`, {
-      method: 'POST',
-      body: JSON.stringify(request),
-    }),
-  rejectSearchSession: (searchSessionId: number, request: RejectSearchSessionRequest) =>
-    requestJson<SearchSessionRead>(`/api/search-sessions/${searchSessionId}/reject`, {
-      method: 'POST',
-      body: JSON.stringify(request),
-    }),
 
   listReports: () => requestJson<ReportSummary[]>('/api/reports'),
   getReport: (reportId: number) => requestJson<ReportRead>(`/api/reports/${reportId}`),

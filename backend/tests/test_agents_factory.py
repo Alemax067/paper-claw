@@ -39,7 +39,7 @@ def test_subagents_have_explicit_isolated_tools():
         subagent["name"]: {tool.name for tool in subagent["tools"]}
         for subagent in subagents
     }
-    assert tool_names_by_agent["paper-discovery-specialist"] == {"search_papers", "recommend_paper_candidates", "get_paper"}
+    assert tool_names_by_agent["paper-discovery-specialist"] == {"search_papers", "get_paper"}
     assert tool_names_by_agent["paper-ingestion-specialist"] == {
         "get_paper_pipeline_status",
         "list_paper_artifacts",
@@ -54,26 +54,27 @@ def test_subagents_have_explicit_isolated_tools():
     assert all("answer_paper_question" not in names for names in tool_names_by_agent.values())
 
 
-def test_discovery_prompt_returns_candidates_for_deterministic_confirmation():
+def test_discovery_prompt_returns_structured_candidate_summaries():
     subagent = create_paper_claw_subagents()[0]
     prompt = subagent["system_prompt"]
 
     assert "Do not confirm, upsert, or claim that an external candidate is active" in prompt
-    assert "call recommend_paper_candidates exactly once" in prompt
     assert "looks like a full paper title" in prompt
     assert "preserve the full title verbatim" in prompt
     assert "even when it is not quoted" in prompt
     assert "never shorten it to the acronym, prefix, or leading phrase" in prompt
     assert "full paper title plus an abbreviation" in prompt
     assert "search the full title first with title mode" in prompt
-    assert "Use candidate_refs like candidate:65" in prompt
-    assert "not persisted paper id" in prompt
-    assert "must call recommend_paper_candidates exactly once whenever there are any plausible candidates" in prompt
-    assert "frontend candidate picker" in prompt
-    assert "Do not only return a markdown/text summary of candidates" in prompt
-    assert "Never recommend candidate_refs with a different search_session_id" in prompt
-    assert "invalid_candidate_refs" in prompt
-    assert "candidate_found_unconfirmed" in prompt
+    assert "structured candidate summary" in prompt
+    assert "exact search_session_id" in prompt
+    assert "exact candidate_id" in prompt
+    assert "Use field name candidate_id" in prompt
+    assert "paper_id only when present on a local persisted paper" in prompt
+    assert "needs_user_confirmation" in prompt
+    assert "ambiguous" in prompt
+    assert "recommend_paper_candidates" not in prompt
+    assert "frontend candidate picker" not in prompt
+    assert "candidate_refs" not in prompt
     assert "interrupt_on" not in subagent
 
 
@@ -104,9 +105,14 @@ def test_main_prompt_routes_reports_only_for_explicit_reading_reports():
     assert "looks like a full paper title" in PAPER_CLAW_SYSTEM_PROMPT
     assert "even if it is not quoted" in PAPER_CLAW_SYSTEM_PROMPT
     assert "do not shorten it to an acronym, prefix, or leading phrase" in PAPER_CLAW_SYSTEM_PROMPT
-    assert "prefixed search candidate refs such as candidate:65" in PAPER_CLAW_SYSTEM_PROMPT
-    assert "emit paper_candidates_recommended" in PAPER_CLAW_SYSTEM_PROMPT
-    assert "Do not pass a candidate ref or bare search candidate id to get_paper" in PAPER_CLAW_SYSTEM_PROMPT
+    assert "structured candidate summaries" in PAPER_CLAW_SYSTEM_PROMPT
+    assert "Do not treat a search candidate id as a paper id" in PAPER_CLAW_SYSTEM_PROMPT
+    assert "ask the user in normal chat to confirm one candidate" in PAPER_CLAW_SYSTEM_PROMPT
+    assert "include the exact search_session_id and candidate_id" in PAPER_CLAW_SYSTEM_PROMPT
+    assert "call confirm_paper_candidate with an exact search_session_id and candidate_id" in PAPER_CLAW_SYSTEM_PROMPT
+    assert "Never guess default ids such as 1" in PAPER_CLAW_SYSTEM_PROMPT
+    assert "paper_candidates_recommended" not in PAPER_CLAW_SYSTEM_PROMPT
+    assert "candidate refs" not in PAPER_CLAW_SYSTEM_PROMPT
 
 
 def test_evidence_prompt_requires_multi_retrieval_structured_pack():
