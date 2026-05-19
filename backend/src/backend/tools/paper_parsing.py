@@ -13,19 +13,25 @@ from backend.tools.context import resolve_active_paper_id, tool_session
 @tool
 def parse_paper(paper_id: int | None = None, run_id: int | None = None) -> dict:
     """Run the parser chain for a paper."""
-    with tool_session() as session:
-        resolved_paper_id = resolve_active_paper_id(session, paper_id)
-        job = default_parse_chain_service(session).run_parse_chain(resolved_paper_id, run_id=run_id)
-        return {"parse_job_id": job.id, "status": job.status, "strategy": job.strategy, "error": job.error_message}
+    try:
+        with tool_session() as session:
+            resolved_paper_id = resolve_active_paper_id(session, paper_id)
+            job = default_parse_chain_service(session).run_parse_chain(resolved_paper_id, run_id=run_id)
+            return {"paper_id": resolved_paper_id, "parse_job_id": job.id, "status": job.status, "strategy": job.strategy, "error": job.error_message}
+    except Exception as exc:
+        return {"paper_id": paper_id, "status": "parse_failed", "error": str(exc)}
 
 
 @tool
 def process_paper_document(paper_id: int | None = None) -> dict:
     """Process the latest parsed document into sections, chunks, and references."""
-    with tool_session() as session:
-        resolved_paper_id = resolve_active_paper_id(session, paper_id)
-        processed = DocumentProcessingService(session).process_latest_parsed_document(resolved_paper_id)
-        return {"processed_document_id": processed.id, "paper_id": processed.paper_id, "status": processed.status, "version": processed.version}
+    try:
+        with tool_session() as session:
+            resolved_paper_id = resolve_active_paper_id(session, paper_id)
+            processed = DocumentProcessingService(session).process_latest_parsed_document(resolved_paper_id)
+            return {"processed_document_id": processed.id, "paper_id": processed.paper_id, "status": processed.status, "version": processed.version}
+    except Exception as exc:
+        return {"paper_id": paper_id, "status": "processing_failed", "error": str(exc)}
 
 
 @tool
@@ -33,7 +39,14 @@ def ingest_paper_document(paper_id: int | None = None, run_id: int | None = None
     """Parse and process a paper document in order for ingestion."""
     with tool_session() as session:
         resolved_paper_id = resolve_active_paper_id(session, paper_id)
-        job = default_parse_chain_service(session).run_parse_chain(resolved_paper_id, run_id=run_id)
+        try:
+            job = default_parse_chain_service(session).run_parse_chain(resolved_paper_id, run_id=run_id)
+        except Exception as exc:
+            return {
+                "paper_id": resolved_paper_id,
+                "status": "parse_failed",
+                "error": str(exc),
+            }
         if job.status != "succeeded":
             return {
                 "paper_id": resolved_paper_id,

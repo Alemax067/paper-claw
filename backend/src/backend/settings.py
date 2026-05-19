@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     arxiv_backoff_max_seconds: float = 30.0
     arxiv_timeout_seconds: int = 30
 
+    report_language: str = "中文"
+
     chat_api_key: str | None = None
     chat_base_url: str | None = None
     chat_model: str | None = None

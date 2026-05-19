@@ -12,11 +12,12 @@ from backend.db.types import ProcessedDocumentStatus, RunStatus, SearchStatus, W
 from backend.schemas import PaperClawContext, ReportGenerationResult, ResolvedProviderConfig
 from backend.tools import DISCOVERY_AGENT_TOOLS, EVIDENCE_AGENT_TOOLS, INGESTION_AGENT_TOOLS, MAIN_AGENT_TOOLS, PAPER_CLAW_TOOLS, REPORT_AGENT_TOOLS
 from backend.tools.context import set_tool_session_factory, tool_runtime_context
-from backend.tools.paper_parsing import ingest_paper_document
+from backend.tools.paper_parsing import ingest_paper_document, parse_paper
 from backend.tools.paper_qa import retrieve_paper_evidence
+from backend.tools.paper_acquisition import download_arxiv_paper_artifacts
 from backend.tools.paper_reports import generate_paper_report
 from backend.tools.paper_search import get_paper, recommend_paper_candidates, search_papers
-from backend.tools.paper_status import get_paper_pipeline_status
+from backend.tools.paper_status import get_paper_pipeline_status, list_paper_artifacts
 
 
 def test_expected_tool_names_exist():
@@ -248,6 +249,106 @@ def test_search_papers_records_candidate_not_found_event(session, engine):
     assert event.payload_json["search_session_id"] == result["search_session_id"]
     assert event.payload_json["candidate_count"] == 0
     assert event.payload_json["candidate_ids"] == []
+
+
+
+def test_parse_paper_returns_structured_error_when_parse_chain_raises(session, engine, monkeypatch):
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    paper = Paper(title="Exploding Parser Paper")
+    session.add(paper)
+    session.commit()
+
+    def fail_parse(_service, paper_id, run_id=None):
+        raise RuntimeError("parser service unavailable")
+
+    monkeypatch.setattr("backend.tools.paper_parsing.ParseChainService.run_parse_chain", fail_parse)
+    set_tool_session_factory(factory)
+    try:
+        result = parse_paper.invoke({"paper_id": paper.id})
+    finally:
+        set_tool_session_factory(None)
+
+    assert result == {"paper_id": paper.id, "status": "parse_failed", "error": "parser service unavailable"}
+
+
+
+def test_ingest_paper_document_returns_parse_failed_when_parse_chain_raises(session, engine, monkeypatch):
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    paper = Paper(title="Exploding Ingest Paper")
+    session.add(paper)
+    session.commit()
+
+    def fail_parse(_service, paper_id, run_id=None):
+        raise RuntimeError("parser service unavailable")
+
+    monkeypatch.setattr("backend.tools.paper_parsing.ParseChainService.run_parse_chain", fail_parse)
+    set_tool_session_factory(factory)
+    try:
+        result = ingest_paper_document.invoke({"paper_id": paper.id})
+    finally:
+        set_tool_session_factory(None)
+
+    assert result == {"paper_id": paper.id, "status": "parse_failed", "error": "parser service unavailable"}
+
+
+
+def test_retrieve_paper_evidence_returns_structured_error(session, engine, monkeypatch):
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    paper = Paper(title="Retrieval Failure Paper")
+    session.add(paper)
+    session.commit()
+
+    def fail_retrieve(_service, paper_id, query, limit=5):
+        raise RuntimeError("embedding provider unavailable")
+
+    monkeypatch.setattr("backend.tools.paper_qa.RetrievalService.retrieve", fail_retrieve)
+    set_tool_session_factory(factory)
+    try:
+        result = retrieve_paper_evidence.invoke({"paper_id": paper.id, "query": "methods"})
+    finally:
+        set_tool_session_factory(None)
+
+    assert result == {"paper_id": paper.id, "status": "failed", "chunks": [], "error": "embedding provider unavailable"}
+
+
+
+def test_download_arxiv_paper_artifacts_returns_structured_error(session, engine, monkeypatch):
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    paper = Paper(title="Download Failure Paper")
+    session.add(paper)
+    session.commit()
+
+    monkeypatch.setattr("backend.tools.paper_acquisition.paper_source_adapters_from_settings", lambda: {})
+    set_tool_session_factory(factory)
+    try:
+        result = download_arxiv_paper_artifacts.invoke({"paper_id": paper.id, "arxiv_id": "2401.00001"})
+    finally:
+        set_tool_session_factory(None)
+
+    assert result == {
+        "status": "failed",
+        "tool": "download_arxiv_paper_artifacts",
+        "paper_id": paper.id,
+        "error": "arXiv paper source is not configured",
+        "action": "ask_user_upload",
+    }
+
+
+
+def test_list_paper_artifacts_returns_structured_error_without_active_paper(session, engine):
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    set_tool_session_factory(factory)
+    try:
+        result = list_paper_artifacts.invoke({})
+    finally:
+        set_tool_session_factory(None)
+
+    assert result == {
+        "status": "failed",
+        "paper_id": None,
+        "artifacts": [],
+        "error": "No active paper. Ask the user to select or confirm a paper first.",
+    }
 
 
 

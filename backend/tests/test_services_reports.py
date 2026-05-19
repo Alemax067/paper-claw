@@ -60,6 +60,21 @@ This section compares method families, evidence trends, emerging themes, and gap
 This section assesses the review, its limitations, and actionable follow-up reading. It identifies useful frameworks, coverage weaknesses, missing areas, and natural next steps for researchers who want to validate empirical claims by reading original papers.
 """
 
+VALID_CHINESE_REGULAR_REPORT = """# 阅读报告
+
+## Part I: Story & Method
+
+这是一份足够详细的中文阅读报告，讨论论文的研究背景、核心问题、方法设计和关键机制。报告区分论文内容、合理推断和批判性评价，并围绕方法为什么可能有效展开说明，避免编造论文没有提供的数据、实验或结论。它会说明研究问题来自哪里、为什么值得解决、作者提出的方法如何组织，以及关键技术主张是否能够从正文中的方法描述、算法流程、图表或实验结果中得到支持。对于论文没有充分说明的假设，报告会明确指出这些内容属于解释性推断而不是作者原文结论。
+
+## Part II: Experiments & Findings
+
+本节讨论实验设置、主要发现、基线比较、评价指标、消融分析和局限性。报告说明哪些证据支持作者的主张，哪些结论仍然缺少足够支撑，并指出如果论文没有提供鲁棒性分析、误差分析或更广泛任务验证，这些缺口应被明确标注。它还会关注实验任务是否覆盖核心应用场景，指标是否能够衡量论文声称解决的问题，基线是否公平充分，以及不同实验结果之间是否存在异常或需要额外解释的现象。
+
+## Part III: Summary & Critique
+
+本节总结论文贡献，评价证据强度，并提出后续研究方向。报告从研究价值、潜在风险、过度主张和可迁移性等角度进行分析，同时保持内容扎根于给定论文正文，不添加论文之外的事实。它会把作者明确声称的贡献、读者可以合理推断的影响、以及报告本身的批判性判断分开表述，并说明哪些后续实验、理论分析或应用验证最适合作为自然延伸。
+"""
+
 
 class RecordingAdapter:
     def __init__(self, responses: list[str] | None = None) -> None:
@@ -191,6 +206,68 @@ def test_generate_reading_report_fails_without_ready_processed_document(session)
     assert result.status == ReportStatus.failed.value
     assert "No ready processed document" in session.get(Report, result.report_id).error_message
     assert "No ready processed document" in result.error_message
+
+
+def test_generate_reading_report_uses_default_report_language(session):
+    paper, _, _ = create_processed_paper(session)
+    adapter = RecordingAdapter(["{\"type\":\"regular\",\"confidence\":0.9,\"reason\":\"method paper\"}", VALID_CHINESE_REGULAR_REPORT])
+
+    result = service_with_adapter(session, adapter).generate_reading_report(paper.id)
+
+    report = session.get(Report, result.report_id)
+    assert result.status == ReportStatus.succeeded.value
+    assert report.metadata_json["output_language"] == "中文"
+    assert report.metadata_json["validation"]["checks"]["language"] is True
+    assert "Output language: 中文" in adapter.messages[-1][1]["content"]
+
+
+def test_generate_reading_report_uses_report_language_setting(monkeypatch, session):
+    monkeypatch.setenv("PAPER_CLAW_REPORT_LANGUAGE", "English")
+    from backend.settings import clear_settings_cache
+
+    clear_settings_cache()
+    paper, _, _ = create_processed_paper(session)
+    adapter = RecordingAdapter(["{\"type\":\"regular\",\"confidence\":0.9,\"reason\":\"method paper\"}", VALID_REGULAR_REPORT])
+    try:
+        result = service_with_adapter(session, adapter).generate_reading_report(paper.id)
+    finally:
+        clear_settings_cache()
+
+    report = session.get(Report, result.report_id)
+    assert result.status == ReportStatus.succeeded.value
+    assert report.metadata_json["output_language"] == "English"
+    assert "Output language: English" in adapter.messages[-1][1]["content"]
+
+
+def test_generate_reading_report_output_language_overrides_default(session):
+    paper, _, _ = create_processed_paper(session)
+    adapter = RecordingAdapter(["{\"type\":\"regular\",\"confidence\":0.9,\"reason\":\"method paper\"}", VALID_REGULAR_REPORT])
+
+    result = service_with_adapter(session, adapter).generate_reading_report(paper.id, output_language="English")
+
+    report = session.get(Report, result.report_id)
+    assert result.status == ReportStatus.succeeded.value
+    assert report.metadata_json["output_language"] == "English"
+    assert report.metadata_json["validation"]["checks"]["language"] is True
+    assert "Output language: English" in adapter.messages[-1][1]["content"]
+
+
+def test_chinese_language_validation_regenerates_english_output(session):
+    paper, _, _ = create_processed_paper(session)
+    adapter = RecordingAdapter([
+        "{\"type\":\"regular\",\"confidence\":0.9,\"reason\":\"method paper\"}",
+        VALID_REGULAR_REPORT,
+        VALID_CHINESE_REGULAR_REPORT,
+    ])
+
+    result = service_with_adapter(session, adapter).generate_reading_report(paper.id, output_language="中文")
+
+    report = session.get(Report, result.report_id)
+    assert result.status == ReportStatus.succeeded.value
+    assert report.metadata_json["regeneration"] == {"attempted": True, "used": True}
+    assert report.metadata_json["validation_attempts"][0]["checks"]["language"] is False
+    assert report.metadata_json["validation"]["checks"]["language"] is True
+
 
 
 def test_generate_reading_report_uses_processed_body_and_records_metadata(session):

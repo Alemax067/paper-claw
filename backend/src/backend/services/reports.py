@@ -15,6 +15,7 @@ from backend.db.types import EvidenceType, ProcessedDocumentStatus, ReportSource
 from backend.integrations.llm import ChatModelAdapter, FixtureChatModelAdapter, OpenAICompatibleChatModelAdapter
 from backend.schemas import ReportGenerationResult, ResolvedProviderConfig, RetrievedChunk
 from backend.services.providers import chat_provider_from_settings
+from backend.settings import get_settings
 from backend.services.retrieval import RetrievalService
 
 
@@ -308,6 +309,7 @@ class ReportGenerationService:
                 thread_id,
                 run_id,
             )
+        resolved_output_language = output_language or get_settings().report_language
         classification = self._classify_instruction_type(paper, provider)
         report_type = ReportType.critical_review.value if classification.instruction_type == "review_survey" else ReportType.paper_summary.value
         report = ReportRepository(self.session).create(
@@ -325,9 +327,9 @@ class ReportGenerationService:
             context = self._build_body_context(provider, paper, body)
             markdown = self._adapter_for(provider).generate_text(
                 provider,
-                self._reading_report_messages(paper, classification, orchestrator_instruction, output_language, context),
+                self._reading_report_messages(paper, classification, orchestrator_instruction, resolved_output_language, context),
             )
-            validation = self._validate_report_markdown(markdown, output_language=output_language, instruction_type=classification.instruction_type)
+            validation = self._validate_report_markdown(markdown, output_language=resolved_output_language, instruction_type=classification.instruction_type)
             regeneration: dict[str, Any] = {"attempted": False, "used": False}
             validations = [asdict(validation)]
             if not validation.passed:
@@ -338,14 +340,14 @@ class ReportGenerationService:
                         paper,
                         classification,
                         orchestrator_instruction,
-                        output_language,
+                        resolved_output_language,
                         context,
                         validation_issues=validation.issues,
                     ),
                 )
                 regenerated_validation = self._validate_report_markdown(
                     regenerated,
-                    output_language=output_language,
+                    output_language=resolved_output_language,
                     instruction_type=classification.instruction_type,
                 )
                 validations.append(asdict(regenerated_validation))
@@ -362,7 +364,7 @@ class ReportGenerationService:
                 classification=classification,
                 context=context,
                 orchestrator_instruction=orchestrator_instruction,
-                output_language=output_language,
+                output_language=resolved_output_language,
                 validation=validation,
                 validations=validations,
                 regeneration=regeneration,
@@ -611,7 +613,7 @@ class ReportGenerationService:
                     f"Paper title:\n{paper.title}\n\n"
                     f"Abstract:\n{paper.abstract or 'Not available.'}\n\n"
                     f"Instruction type: {classification.instruction_type}\n"
-                    f"Output language: {output_language or 'Match the user/orchestrator instruction.'}\n\n"
+                    f"Output language: {output_language}\n\n"
                     f"Base instruction:\n{instructions}\n\n"
                     f"Orchestrator instruction:\n{orchestrator_instruction or 'No additional instruction.'}\n\n"
                     f"Context strategy: {context.strategy}. The paper body below excludes References.\n"
@@ -636,15 +638,15 @@ class ReportGenerationService:
             else ("Part I: Story & Method", "Part II: Experiments & Findings", "Part III: Summary & Critique")
         )
         checks["has_required_sections"] = all(section in text for section in required)
-        language = (output_language or "").lower()
-        if "chinese" in language or "中文" in language or "汉语" in language:
+        language = output_language.lower()
+        if _is_chinese_language(language):
             checks["language"] = bool(re.search(r"[一-鿿]", text))
-        elif "english" in language or "英语" in language:
+        elif _is_english_language(language):
             letters = sum(1 for char in text if char.isascii() and char.isalpha())
             cjk = len(re.findall(r"[一-鿿]", text))
             checks["language"] = letters > cjk * 5
         else:
-            checks["language"] = "skipped"
+            checks["language"] = "skipped_unknown_language"
         for name, passed in checks.items():
             if passed is False:
                 issues.append(name.replace("_", " ") + " check failed")
@@ -718,6 +720,14 @@ def _reading_report_metadata(
         "regeneration": regeneration,
         "processed_document": {"id": processed.id, "version": processed.version, **body_metadata},
     }
+
+
+def _is_chinese_language(value: str) -> bool:
+    return "chinese" in value or "中文" in value or "汉语" in value or "用中文" in value or "中文生成" in value
+
+
+def _is_english_language(value: str) -> bool:
+    return "english" in value or "英语" in value
 
 
 def _classification_messages(paper: Paper) -> list[dict]:

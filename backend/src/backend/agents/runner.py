@@ -245,6 +245,16 @@ def _stream_agent_graph(session: Session, prepared: PreparedAgentRun, request: A
 
         thread = session.get_one(Thread, prepared.thread_id)
         run = session.get_one(AgentRun, prepared.run_id)
+        if run.status in {RunStatus.failed.value, RunStatus.cancelled.value}:
+            yield AgentStreamEvent(
+                type="run_failed" if run.status == RunStatus.failed.value else "run_cancelled",
+                thread_id=prepared.thread_id,
+                run_id=prepared.run_id,
+                status=run.status,
+                error=run.error_message,
+                payload={"status": run.status, "error": run.error_message},
+            )
+            return
         message_text = last_message_text or "".join(message_parts)
         assistant_message = ThreadRepository(session).add_message(
             thread.id,
@@ -278,22 +288,25 @@ def _stream_agent_graph(session: Session, prepared: PreparedAgentRun, request: A
         error_payload = _exception_payload(exc)
         run = session.get(AgentRun, prepared.run_id)
         if run is not None:
-            run.status = RunStatus.failed.value
-            run.error_message = error_payload["error"]
-            run.finished_at = datetime.now().astimezone()
-            failed_event = AgentRunRepository(session).append_event(
-                run.id,
-                "agent_message_failed",
-                level=EventLevel.error.value,
-                payload_json={**error_payload, "status": RunStatus.failed.value},
-            )
+            if run.status != RunStatus.failed.value:
+                run.status = RunStatus.failed.value
+                run.error_message = error_payload["error"]
+                run.finished_at = datetime.now().astimezone()
+                failed_event = AgentRunRepository(session).append_event(
+                    run.id,
+                    "agent_message_failed",
+                    level=EventLevel.error.value,
+                    payload_json={**error_payload, "status": RunStatus.failed.value},
+                )
+            else:
+                failed_event = None
             session.commit()
             yield AgentStreamEvent(
                 type="run_failed",
                 thread_id=prepared.thread_id,
                 run_id=prepared.run_id,
-                sequence=failed_event.sequence,
-                event_type=failed_event.event_type,
+                sequence=failed_event.sequence if failed_event is not None else None,
+                event_type=failed_event.event_type if failed_event is not None else None,
                 status=RunStatus.failed.value,
                 error=error_payload["error"],
                 payload={**error_payload, "status": RunStatus.failed.value},

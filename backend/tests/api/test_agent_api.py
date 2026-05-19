@@ -104,6 +104,36 @@ def test_post_agent_message_stream_stops_persisting_after_cancel(client, session
     assert "agent_message_completed" not in event_types
 
 
+def test_post_agent_message_stream_preserves_failed_run_from_tool_middleware(client, session, monkeypatch):
+    def chunks(context):
+        run = session.get(AgentRun, context.run_id)
+        run.status = RunStatus.failed.value
+        run.error_message = "subagent task failed"
+        AgentRunRepository(session).append_event(
+            run.id,
+            "agent_message_failed",
+            level="error",
+            payload_json={"error": "subagent task failed", "status": RunStatus.failed.value},
+        )
+        session.commit()
+        return
+        yield
+
+    monkeypatch.setattr("backend.agents.runner.create_paper_claw_agent", lambda: FakeAgent(chunks))
+
+    with client.stream("POST", "/api/agent/messages/stream", json={"message": "fail inside task", "model": "test-model"}) as response:
+        assert response.status_code == 200
+        events = [line for line in response.iter_lines() if line]
+
+    payloads = [json.loads(line) for line in events]
+    assert [payload["type"] for payload in payloads] == ["run_started", "run_failed"]
+    run = session.get(AgentRun, payloads[-1]["run_id"])
+    assert run.status == RunStatus.failed.value
+    assert run.error_message == "subagent task failed"
+    assert "agent_message_completed" not in [event.event_type for event in run.events]
+
+
+
 def test_post_agent_message_reuses_existing_thread(client, session, monkeypatch):
     thread = Thread(title="Existing thread")
     session.add(thread)

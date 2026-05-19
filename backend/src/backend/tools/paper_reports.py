@@ -16,7 +16,7 @@ def generate_paper_report(
     instructions: str | None = None,
     paper_id: int | None = None,
 ) -> dict:
-    """Generate a persisted reading report for a paper."""
+    """Generate a persisted reading report, using the configured report language unless output_language explicitly overrides it."""
     with tool_session() as session:
         resolved_paper_id = resolve_active_paper_id(session, paper_id)
         context = current_tool_context()

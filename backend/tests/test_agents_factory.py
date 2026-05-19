@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
 from pydantic import BaseModel
+from sqlalchemy.orm import sessionmaker
 from langchain.agents.middleware import ModelRequest
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -13,8 +15,10 @@ from backend.agents.model import _json_safe, _messages_with_active_paper_info, a
 from backend.agents.prompts import PAPER_CLAW_SYSTEM_PROMPT
 from backend.agents.subagents import create_paper_claw_subagents
 from backend.agents.tool_events import record_tool_event_call
+from backend.db.models import AgentRun
+from backend.db.types import RunStatus, WorkflowName
 from backend.schemas import PaperClawContext
-from backend.tools.context import current_tool_context
+from backend.tools.context import current_tool_context, set_tool_session_factory
 
 
 def test_subagent_names_are_unique():
@@ -96,7 +100,7 @@ def test_main_prompt_routes_reports_only_for_explicit_reading_reports():
     assert "Do not use the report specialist for ordinary paper QA" in PAPER_CLAW_SYSTEM_PROMPT
     assert "multiple times with decomposed subquestions" in PAPER_CLAW_SYSTEM_PROMPT
     assert "answer the user yourself using only returned evidence" in PAPER_CLAW_SYSTEM_PROMPT
-    assert "output language matching the user's language" in PAPER_CLAW_SYSTEM_PROMPT
+    assert "Report language defaults to the configured report language" in PAPER_CLAW_SYSTEM_PROMPT
     assert "looks like a full paper title" in PAPER_CLAW_SYSTEM_PROMPT
     assert "even if it is not quoted" in PAPER_CLAW_SYSTEM_PROMPT
     assert "do not shorten it to an acronym, prefix, or leading phrase" in PAPER_CLAW_SYSTEM_PROMPT
@@ -127,7 +131,8 @@ def test_report_prompt_prepares_and_validates_service_generation():
     assert "no processed cleaned body is ready" in prompt
     assert "Do not manually write report markdown" in prompt
     assert "Call generate_paper_report with the orchestrator instruction" in prompt
-    assert "output language matching the user's language" in prompt
+    assert "configured report language" in prompt
+    assert "pass output_language only when the user explicitly overrides the language" in prompt
     assert "validation metadata" in prompt
 
 
@@ -183,6 +188,38 @@ def test_tool_middleware_binds_runtime_context():
     assert isinstance(result, ToolMessage)
     assert seen == [PaperClawContext(thread_id=12, active_paper_id=56)]
     assert current_tool_context() is None
+
+
+def test_tool_middleware_marks_run_failed_for_task_tool_error(session, engine):
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    run = AgentRun(workflow=WorkflowName.paper_qa.value, status=RunStatus.running.value)
+    session.add(run)
+    session.commit()
+    request = SimpleNamespace(
+        runtime=SimpleNamespace(context=PaperClawContext(run_id=run.id)),
+        tool_call={"id": "call-1", "args": {}},
+        tool=SimpleNamespace(name="task"),
+    )
+
+    def handler(_request):
+        raise RuntimeError("peer closed connection without sending complete message body")
+
+    set_tool_session_factory(factory)
+    try:
+        with pytest.raises(RuntimeError):
+            record_tool_event_call(request, handler)
+    finally:
+        set_tool_session_factory(None)
+
+    session.refresh(run)
+    assert run.status == RunStatus.failed.value
+    assert run.error_message == "peer closed connection without sending complete message body"
+    assert [event.event_type for event in run.events] == [
+        "agent_tool_call_started",
+        "agent_tool_call_failed",
+        "agent_message_failed",
+    ]
+
 
 
 def test_model_middleware_forwards_runtime_context(monkeypatch):
