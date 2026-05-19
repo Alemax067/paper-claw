@@ -52,10 +52,20 @@ def test_subagents_have_explicit_isolated_tools():
 
 def test_discovery_prompt_returns_candidates_for_deterministic_confirmation():
     subagent = create_paper_claw_subagents()[0]
+    prompt = subagent["system_prompt"]
 
-    assert "Do not confirm, upsert, or claim that an external candidate is active" in subagent["system_prompt"]
-    assert "call recommend_paper_candidates exactly once" in subagent["system_prompt"]
-    assert "candidate_found_unconfirmed" in subagent["system_prompt"]
+    assert "Do not confirm, upsert, or claim that an external candidate is active" in prompt
+    assert "call recommend_paper_candidates exactly once" in prompt
+    assert "full paper title plus an abbreviation" in prompt
+    assert "search the full title first with title mode" in prompt
+    assert "Use candidate_refs like candidate:65" in prompt
+    assert "not persisted paper id" in prompt
+    assert "must call recommend_paper_candidates exactly once whenever there are any plausible candidates" in prompt
+    assert "frontend candidate picker" in prompt
+    assert "Do not only return a markdown/text summary of candidates" in prompt
+    assert "Never recommend candidate_refs with a different search_session_id" in prompt
+    assert "invalid_candidate_refs" in prompt
+    assert "candidate_found_unconfirmed" in prompt
     assert "interrupt_on" not in subagent
 
 
@@ -83,6 +93,9 @@ def test_main_prompt_routes_reports_only_for_explicit_reading_reports():
     assert "multiple times with decomposed subquestions" in PAPER_CLAW_SYSTEM_PROMPT
     assert "answer the user yourself using only returned evidence" in PAPER_CLAW_SYSTEM_PROMPT
     assert "output language matching the user's language" in PAPER_CLAW_SYSTEM_PROMPT
+    assert "prefixed search candidate refs such as candidate:65" in PAPER_CLAW_SYSTEM_PROMPT
+    assert "emit paper_candidates_recommended" in PAPER_CLAW_SYSTEM_PROMPT
+    assert "Do not pass a candidate ref or bare search candidate id to get_paper" in PAPER_CLAW_SYSTEM_PROMPT
 
 
 def test_evidence_prompt_requires_multi_retrieval_structured_pack():
