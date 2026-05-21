@@ -16,9 +16,13 @@ export function App() {
   const [selectedThreadId, setSelectedThreadId] = useState<number | null>(() => storedNumber('paper-claw:selected-thread-id'));
   const [selectedPaperId, setSelectedPaperId] = useState<number | null>(null);
   const [selectedReportId, setSelectedReportId] = useState<number | null>(null);
-  const [activeRunId, setActiveRunId] = useState<number | null>(() => storedNumber('paper-claw:active-run-id'));
+  const [activeRunIdByThreadId, setActiveRunIdByThreadId] = useState<Record<number, number>>(() => {
+    const storedRunId = storedNumber('paper-claw:active-run-id');
+    return selectedThreadId != null && storedRunId != null ? { [selectedThreadId]: storedRunId } : {};
+  });
+  const [draftActiveRunId, setDraftActiveRunId] = useState<number | null>(() => (selectedThreadId == null ? storedNumber('paper-claw:active-run-id') : null));
   const [activePaperId, setActivePaperId] = useState<number | null>(null);
-  const [activeRun, setActiveRun] = useState<RunRead | null>(null);
+  const [activeRunByThreadId, setActiveRunByThreadId] = useState<Record<number, RunRead>>({});
   const [refreshToken, setRefreshToken] = useState(0);
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [reportError, setReportError] = useState<string | null>(null);
@@ -27,14 +31,45 @@ export function App() {
     storeNumber('paper-claw:selected-thread-id', selectedThreadId);
   }, [selectedThreadId]);
 
+  const activeRunId = selectedThreadId == null ? draftActiveRunId : (activeRunIdByThreadId[selectedThreadId] ?? null);
+  const activeRun = selectedThreadId == null ? null : (activeRunByThreadId[selectedThreadId] ?? null);
+
   useEffect(() => {
     storeNumber('paper-claw:active-run-id', activeRunId);
   }, [activeRunId]);
 
   const requestRefresh = useCallback(() => setRefreshToken((value) => value + 1), []);
-  const onRunUpdated = useCallback((run: RunRead | null) => {
-    setActiveRun(run);
-  }, []);
+  const onRunSelected = useCallback((runId: number | null, threadId?: number | null) => {
+    const targetThreadId = threadId ?? selectedThreadId;
+    if (targetThreadId == null) {
+      setDraftActiveRunId(runId);
+      return;
+    }
+    setActiveRunIdByThreadId((current) => {
+      const next = { ...current };
+      if (runId == null) {
+        delete next[targetThreadId];
+      } else {
+        next[targetThreadId] = runId;
+      }
+      return next;
+    });
+  }, [selectedThreadId]);
+  const onRunUpdated = useCallback((run: RunRead | null, threadId?: number | null) => {
+    const targetThreadId = threadId ?? run?.thread_id ?? selectedThreadId;
+    if (targetThreadId == null) {
+      return;
+    }
+    setActiveRunByThreadId((current) => {
+      const next = { ...current };
+      if (run == null) {
+        delete next[targetThreadId];
+      } else {
+        next[targetThreadId] = run;
+      }
+      return next;
+    });
+  }, [selectedThreadId]);
 
   const deleteReport = useCallback(async (reportId: number) => {
     if (!window.confirm('Delete this report permanently?')) {
@@ -75,7 +110,7 @@ export function App() {
           refreshToken={refreshToken}
           globalError={globalError}
           onThreadSelected={setSelectedThreadId}
-          onRunSelected={setActiveRunId}
+          onRunSelected={onRunSelected}
           onRunUpdated={onRunUpdated}
           onRefresh={requestRefresh}
           onActivePaperSelected={setActivePaperId}

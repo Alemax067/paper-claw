@@ -13,8 +13,8 @@ interface ChatPageProps {
   refreshToken: number;
   globalError: string | null;
   onThreadSelected: (threadId: number | null) => void;
-  onRunSelected: (runId: number | null) => void;
-  onRunUpdated: (run: RunRead | null) => void;
+  onRunSelected: (runId: number | null, threadId?: number | null) => void;
+  onRunUpdated: (run: RunRead | null, threadId?: number | null) => void;
   onRefresh: () => void;
   onActivePaperSelected?: (paperId: number | null) => void;
   onError: (message: string | null) => void;

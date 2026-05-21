@@ -19,8 +19,8 @@ interface AgentPanelProps {
   activeRun: RunRead | null;
   refreshToken: number;
   onThreadSelected: (threadId: number) => void;
-  onRunSelected: (runId: number) => void;
-  onRunLoaded: (run: RunRead | null) => void;
+  onRunSelected: (runId: number | null, threadId?: number | null) => void;
+  onRunLoaded: (run: RunRead | null, threadId?: number | null) => void;
   onRefresh: () => void;
   onActivePaperSelected?: (paperId: number | null) => void;
   onError: (message: string | null) => void;
@@ -45,11 +45,22 @@ export function AgentPanel({
   const [submitStatus, setSubmitStatus] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const terminalRefreshKeyRef = useRef<string | null>(null);
-  const activeRunRef = useRef<RunRead | null>(null);
+  const selectedThreadIdRef = useRef<number | null>(selectedThreadId);
+  const activeRunRefByThreadId = useRef<Record<number, RunRead>>({});
 
   useEffect(() => {
-    activeRunRef.current = activeRun;
+    selectedThreadIdRef.current = selectedThreadId;
+  }, [selectedThreadId]);
+
+  useEffect(() => {
+    if (activeRun?.thread_id != null) {
+      activeRunRefByThreadId.current[activeRun.thread_id] = activeRun;
+    }
   }, [activeRun]);
+
+  useEffect(() => {
+    setSubmitStatus(null);
+  }, [selectedThreadId]);
 
   const loader = useCallback(async () => {
     if (selectedThreadId == null) {
@@ -61,11 +72,11 @@ export function AgentPanel({
 
   const loadRun = useCallback(async () => {
     if (activeRunId == null) {
-      onRunLoaded(null);
+      onRunLoaded(null, selectedThreadId);
       return;
     }
     const run = await api.getRun(activeRunId);
-    onRunLoaded(run);
+    onRunLoaded(run, run.thread_id);
     if (terminalRunStatuses.has(run.status)) {
       const refreshKey = `${run.id}:${run.status}:${run.updated_at}`;
       if (terminalRefreshKeyRef.current !== refreshKey) {
@@ -74,7 +85,7 @@ export function AgentPanel({
         onRefresh();
       }
     }
-  }, [activeRunId, onRefresh, onRunLoaded, reload]);
+  }, [activeRunId, onRefresh, onRunLoaded, reload, selectedThreadId]);
 
   useEffect(() => {
     terminalRefreshKeyRef.current = null;
@@ -93,8 +104,8 @@ export function AgentPanel({
       return;
     }
     const latestRun = [...thread.runs].sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime())[0];
-    onRunSelected(latestRun.id);
-    onRunLoaded(latestRun);
+    onRunSelected(latestRun.id, latestRun.thread_id);
+    onRunLoaded(latestRun, latestRun.thread_id);
   }, [activeRunId, onRunLoaded, onRunSelected, selectedThreadId, thread?.runs]);
 
   useEffect(() => {
@@ -140,43 +151,17 @@ export function AgentPanel({
     onError(null);
     setSubmitStatus('Starting agent run...');
     try {
-      const response = await api.sendAgentMessageStream(
-        {
-          thread_id: selectedThreadId,
-          active_paper_id: activePaperId,
-          message,
-        },
-        async (event) => {
-          if (event.type === 'run_started') {
-            onThreadSelected(event.thread_id);
-            const startedRun = runFromStreamEvent(event);
-            activeRunRef.current = startedRun;
-            onRunLoaded(startedRun);
-            onRunSelected(event.run_id);
-            setSubmitStatus('Agent run is running');
-            setThread(await api.getThread(event.thread_id));
-            onRefresh();
-            return;
-          }
-          const streamedRun = mergeStreamEventIntoRun(activeRunRef.current?.id === event.run_id ? activeRunRef.current : null, event);
-          if (streamedRun) {
-            activeRunRef.current = streamedRun;
-            onRunLoaded(streamedRun);
-          }
-          if (event.type === 'run_completed' || event.type === 'run_failed' || event.type === 'run_waiting_for_user') {
-            const persistedRun = await api.getRun(event.run_id);
-            activeRunRef.current = persistedRun;
-            onRunLoaded(persistedRun);
-            setThread(await api.getThread(event.thread_id));
-            onRefresh();
-          }
-        }
-      );
+      const response = await api.sendAgentMessage({
+        thread_id: selectedThreadId,
+        active_paper_id: activePaperId,
+        message,
+      });
       onThreadSelected(response.thread_id);
-      onRunSelected(response.run_id);
+      selectedThreadIdRef.current = response.thread_id;
+      onRunSelected(response.run_id, response.thread_id);
       const persistedRun = await api.getRun(response.run_id);
-      activeRunRef.current = persistedRun;
-      onRunLoaded(persistedRun);
+      activeRunRefByThreadId.current[response.thread_id] = persistedRun;
+      onRunLoaded(persistedRun, response.thread_id);
       setThread(await api.getThread(response.thread_id));
       setSubmitStatus(null);
       onRefresh();
@@ -238,7 +223,7 @@ export function AgentPanel({
         <div ref={bottomRef} />
       </div>
       <div className="chat-composer-dock">
-        <MessageComposer activePaperId={activePaperId} canCancelRun={showCancelRun} onSubmit={submitMessage} onCancelRun={cancelRun} />
+        <MessageComposer key={selectedThreadId ?? 'new'} activePaperId={activePaperId} canCancelRun={showCancelRun} onSubmit={submitMessage} onCancelRun={cancelRun} />
       </div>
     </section>
   );

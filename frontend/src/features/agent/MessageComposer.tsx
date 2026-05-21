@@ -31,10 +31,10 @@ export function MessageComposer({ disabled = false, activePaperId, canCancelRun 
     if (!trimmed) {
       return;
     }
+    setMessage('');
     setSubmitting(true);
     try {
       await onSubmit(trimmed);
-      setMessage('');
     } finally {
       setSubmitting(false);
     }

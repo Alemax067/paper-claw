@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 import traceback
 from uuid import uuid4
@@ -24,6 +24,7 @@ from backend.settings import Settings, get_settings
 from backend.tools.context import tool_runtime_context
 
 STREAM_MODES = ["messages", "updates"]
+STALE_RUNNING_RUN_AFTER = timedelta(minutes=20)
 
 
 @dataclass(frozen=True)
@@ -355,13 +356,34 @@ def prepare_agent_message_run(session: Session, request: AgentMessageRequest) ->
 
 
 def list_run_events(session: Session, run_id: int, after_sequence: int | None = None) -> list[RunEventRead]:
-    if session.get(AgentRun, run_id) is None:
+    run = session.get(AgentRun, run_id)
+    if run is None:
         raise ValueError("Run not found")
+    _mark_stale_running_run_failed(session, run)
     statement = select(AgentRunEvent).where(AgentRunEvent.run_id == run_id)
     if after_sequence is not None:
         statement = statement.where(AgentRunEvent.sequence > after_sequence)
     events = session.scalars(statement.order_by(AgentRunEvent.sequence)).all()
     return [run_event_read(event) for event in events]
+
+
+def _mark_stale_running_run_failed(session: Session, run: AgentRun) -> None:
+    if run.status != RunStatus.running.value:
+        return
+    last_event_at = max((event.created_at for event in run.events), default=run.updated_at or run.started_at or run.created_at)
+    if datetime.now().astimezone() - last_event_at < STALE_RUNNING_RUN_AFTER:
+        return
+    run.status = RunStatus.failed.value
+    run.error_message = "Agent run stopped before completion. Please retry the request."
+    run.finished_at = datetime.now().astimezone()
+    AgentRunRepository(session).append_event(
+        run.id,
+        "agent_message_failed",
+        level=EventLevel.error.value,
+        payload_json={"error": run.error_message, "status": RunStatus.failed.value, "source": "stale_run_reaper"},
+    )
+    session.commit()
+
 
 
 def _exception_payload(exc: Exception) -> dict[str, Any]:
