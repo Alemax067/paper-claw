@@ -38,6 +38,24 @@ class PaperIdentifierInput(BaseModel):
     is_primary: bool = False
 
 
+class PaperMetadataPatch(BaseModel):
+    title: str | None = None
+    abstract: str | None = None
+    year: int | None = None
+    venue: str | None = None
+    authors: list[str] | None = None
+    best_pdf_url: str | None = None
+    landing_page_url: str | None = None
+
+
+class PaperSourceRecordPatch(BaseModel):
+    source: str
+    source_record_id: str | None = None
+    source_url: str | None = None
+    is_primary: bool = False
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
 class PaperSearchResult(BaseModel):
     source: str
     source_record_id: str | None = None
@@ -264,6 +282,8 @@ class SearchSessionRead(BaseModel):
 class RunDecision(BaseModel):
     type: Literal["approve", "edit", "reject", "respond"]
     args: dict[str, Any] | None = None
+    edited_action: dict[str, Any] | None = None
+    message: str | None = None
 
 
 class ApprovalRequest(BaseModel):

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 from backend.db.models import Artifact, Memory, Paper, Report, ReportEvidence
 from backend.db.repositories import AgentRunRepository, ParsingRepository, ThreadRepository
-from backend.db.types import ArtifactKind, EvidenceType, PaperArtifactRole, ReportType, ThreadStatus, WorkflowName
+from backend.db.types import ArtifactKind, EventLevel, EvidenceType, PaperArtifactRole, ReportType, RunStatus, ThreadStatus, WorkflowName
 from backend.services.storage import ArtifactStorageService
 from backend.integrations.storage import LocalStorage
 
@@ -25,6 +27,25 @@ def test_threads_read_model(client, session):
     payload = detail_response.json()
     assert payload["messages"][0]["content_text"] == "hello"
     assert payload["runs"][0]["events"][0]["id"] == event.id
+
+
+def test_run_read_model_marks_stale_running_run_failed(client, session):
+    runs = AgentRunRepository(session)
+    thread = ThreadRepository(session).create("Stale run thread")
+    run = runs.create(WorkflowName.paper_qa.value, thread_id=thread.id, status=RunStatus.running.value)
+    run.started_at = datetime.now().astimezone() - timedelta(minutes=30)
+    event = runs.append_event(run.id, "agent_stream_update", payload_json={"data": {"model": None}})
+    event.created_at = datetime.now().astimezone() - timedelta(minutes=30)
+    session.commit()
+
+    response = client.get(f"/api/runs/{run.id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == RunStatus.failed.value
+    assert payload["error_message"] == "Agent run stopped before completion. Please retry the request."
+    assert payload["events"][-1]["event_type"] == "agent_message_failed"
+    assert payload["events"][-1]["level"] == EventLevel.error.value
 
 
 def test_archive_thread_hides_it_from_default_list(client, session):

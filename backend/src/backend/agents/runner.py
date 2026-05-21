@@ -359,7 +359,7 @@ def list_run_events(session: Session, run_id: int, after_sequence: int | None = 
     run = session.get(AgentRun, run_id)
     if run is None:
         raise ValueError("Run not found")
-    _mark_stale_running_run_failed(session, run)
+    mark_stale_running_run_failed(session, run)
     statement = select(AgentRunEvent).where(AgentRunEvent.run_id == run_id)
     if after_sequence is not None:
         statement = statement.where(AgentRunEvent.sequence > after_sequence)
@@ -367,7 +367,7 @@ def list_run_events(session: Session, run_id: int, after_sequence: int | None = 
     return [run_event_read(event) for event in events]
 
 
-def _mark_stale_running_run_failed(session: Session, run: AgentRun) -> None:
+def mark_stale_running_run_failed(session: Session, run: AgentRun) -> None:
     if run.status != RunStatus.running.value:
         return
     last_event_at = max((event.created_at for event in run.events), default=run.updated_at or run.started_at or run.created_at)
@@ -383,6 +383,7 @@ def _mark_stale_running_run_failed(session: Session, run: AgentRun) -> None:
         payload_json={"error": run.error_message, "status": RunStatus.failed.value, "source": "stale_run_reaper"},
     )
     session.commit()
+    session.expire(run, ["events"])
 
 
 

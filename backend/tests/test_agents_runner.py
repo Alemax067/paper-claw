@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from backend.agents.runner import _active_paper_system_info, _agent_context, prepare_agent_message_run
+from backend.agents.runner import _active_paper_system_info, _agent_context, _resume_decisions, prepare_agent_message_run
 from backend.agents.runner import PreparedAgentRun
 from backend.db.models import Paper, Thread
 from backend.settings import clear_settings_cache
-from backend.schemas import AgentMessageRequest
+from backend.schemas import AgentMessageRequest, ApprovalRequest
 
 
 def test_prepare_agent_message_run_persists_request_active_paper(session):
@@ -48,6 +48,32 @@ def test_prepare_agent_message_run_falls_back_to_thread_focus(session):
     assert session.get(Thread, thread.id).current_focus_paper_id == paper.id
     assert prepared.active_paper_system_info is not None
     assert f"Active paper is #{paper.id}: Existing Focus" in prepared.active_paper_system_info
+
+
+def test_resume_decisions_preserves_edit_payload_shape():
+    decisions = _resume_decisions(
+        ApprovalRequest(
+            decisions=[
+                {
+                    "type": "edit",
+                    "edited_action": {"name": "update_paper_metadata", "args": {"paper_id": 15, "metadata": {"venue": "EMNLP 2024"}}},
+                }
+            ]
+        )
+    )
+
+    assert decisions == [
+        {
+            "type": "edit",
+            "edited_action": {"name": "update_paper_metadata", "args": {"paper_id": 15, "metadata": {"venue": "EMNLP 2024"}}},
+        }
+    ]
+
+
+def test_resume_decisions_preserves_reject_message():
+    decisions = _resume_decisions(ApprovalRequest(decisions=[{"type": "reject", "message": "not this change"}]))
+
+    assert decisions == [{"type": "reject", "message": "not this change"}]
 
 
 def test_agent_context_request_model_falls_back_to_settings_provider(monkeypatch):

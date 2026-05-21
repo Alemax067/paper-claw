@@ -10,7 +10,7 @@ from backend.db.models import AgentRun, AgentRunEvent, Paper, PaperIdentifier, P
 from backend.db.repositories import ParsingRepository
 from backend.db.types import ProcessedDocumentStatus, RunStatus, SearchStatus, WorkflowName
 from backend.schemas import PaperClawContext, ReportGenerationResult, ResolvedProviderConfig
-from backend.tools import DISCOVERY_AGENT_TOOLS, EVIDENCE_AGENT_TOOLS, INGESTION_AGENT_TOOLS, MAIN_AGENT_TOOLS, PAPER_CLAW_TOOLS, REPORT_AGENT_TOOLS
+from backend.tools import DISCOVERY_AGENT_TOOLS, EVIDENCE_AGENT_TOOLS, INGESTION_AGENT_TOOLS, MAIN_AGENT_TOOLS, PAPER_CLAW_TOOLS, REPORT_AGENT_TOOLS, update_paper_metadata
 from backend.tools.context import set_tool_session_factory, tool_runtime_context
 from backend.tools.paper_parsing import ingest_paper_document, parse_paper
 from backend.tools.paper_qa import retrieve_paper_evidence
@@ -31,6 +31,7 @@ def test_expected_tool_names_exist():
         "list_paper_artifacts",
         "list_paper_reports",
         "confirm_paper_candidate",
+        "update_paper_metadata",
     }
     assert {tool.name for tool in DISCOVERY_AGENT_TOOLS} == {"search_papers", "get_paper"}
     assert {tool.name for tool in INGESTION_AGENT_TOOLS} == {
@@ -86,6 +87,66 @@ def test_search_papers_returns_rich_local_candidate_payload(session, engine):
     assert "candidate_ref" not in result["candidates"][0]
     assert result["candidates"][0]["title"] == "Recursive Multi-Agent Systems"
     assert result["candidates"][0]["venue"] == "arXiv"
+
+
+
+def test_update_paper_metadata_tool_updates_explicit_paper(session, engine):
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    paper = Paper(title="Metadata Tool Paper")
+    session.add(paper)
+    session.commit()
+    set_tool_session_factory(factory)
+    try:
+        result = update_paper_metadata.invoke(
+            {
+                "paper_id": paper.id,
+                "metadata": {"venue": "arXiv", "best_pdf_url": "https://arxiv.org/pdf/2406.17328v3"},
+                "identifiers": [{"identifier_type": "arxiv", "identifier_value": "https://arxiv.org/abs/2406.17328v3"}],
+                "source_records": [{"source": "arxiv", "source_record_id": "2406.17328v3", "source_url": "https://arxiv.org/abs/2406.17328v3"}],
+                "reason": "arXiv metadata discovered after initial confirmation",
+            }
+        )
+    finally:
+        set_tool_session_factory(None)
+
+    session.refresh(paper)
+    assert result["status"] == "updated"
+    assert paper.venue == "arXiv"
+    assert paper.best_pdf_url == "https://arxiv.org/pdf/2406.17328v3"
+    assert session.query(PaperIdentifier).filter_by(paper_id=paper.id, identifier_type="arxiv", identifier_value="2406.17328").one()
+    assert session.query(PaperSourceRecord).filter_by(paper_id=paper.id, source="arxiv", source_record_id="2406.17328v3").one()
+
+
+
+def test_update_paper_metadata_tool_uses_active_paper(session, engine):
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    paper = Paper(title="Active Metadata Paper")
+    session.add(paper)
+    session.commit()
+    set_tool_session_factory(factory)
+    try:
+        with tool_runtime_context(PaperClawContext(active_paper_id=paper.id)):
+            result = update_paper_metadata.invoke({"metadata": {"year": 2026}, "reason": "year discovered"})
+    finally:
+        set_tool_session_factory(None)
+
+    session.refresh(paper)
+    assert result["status"] == "updated"
+    assert result["paper_id"] == paper.id
+    assert paper.year == 2026
+
+
+
+def test_update_paper_metadata_tool_returns_structured_error_without_active_paper(session, engine):
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    set_tool_session_factory(factory)
+    try:
+        result = update_paper_metadata.invoke({"metadata": {"year": 2026}})
+    finally:
+        set_tool_session_factory(None)
+
+    assert result["status"] == "failed"
+    assert "No active paper" in result["error"]
 
 
 

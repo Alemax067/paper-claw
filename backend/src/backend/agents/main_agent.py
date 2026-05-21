@@ -17,6 +17,8 @@ from backend.agents.subagents import create_paper_claw_subagents
 from backend.agents.tool_events import paper_claw_tool_event_middleware
 from backend.tools import MAIN_AGENT_TOOLS
 
+CONFIRM_INTERRUPT = {"allowed_decisions": ["approve", "edit", "reject"]}
+
 
 def create_paper_claw_agent(
     model: str | BaseChatModel | None = None,
@@ -42,5 +44,6 @@ def create_paper_claw_agent(
         checkpointer=runtime_checkpointer,
         backend=runtime_backend,
         store=runtime_store,
+        interrupt_on={"update_paper_metadata": CONFIRM_INTERRUPT},
         name="paper-claw",
     )

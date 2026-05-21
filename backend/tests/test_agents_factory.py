@@ -10,6 +10,7 @@ from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from backend.agents.checkpointing import _psycopg_connection_string
+import backend.agents.main_agent as main_agent_module
 from backend.agents.main_agent import create_paper_claw_agent
 from backend.agents.model import _json_safe, _messages_with_active_paper_info, apply_runtime_model
 from backend.agents.prompts import PAPER_CLAW_SYSTEM_PROMPT
@@ -111,6 +112,11 @@ def test_main_prompt_routes_reports_only_for_explicit_reading_reports():
     assert "include the exact search_session_id and candidate_id" in PAPER_CLAW_SYSTEM_PROMPT
     assert "call confirm_paper_candidate with an exact search_session_id and candidate_id" in PAPER_CLAW_SYSTEM_PROMPT
     assert "Never guess default ids such as 1" in PAPER_CLAW_SYSTEM_PROMPT
+    assert "update_paper_metadata" in PAPER_CLAW_SYSTEM_PROMPT
+    assert "Before calling update_paper_metadata, explain" in PAPER_CLAW_SYSTEM_PROMPT
+    assert "ask for user confirmation" in PAPER_CLAW_SYSTEM_PROMPT
+    assert "Do not call update_paper_metadata until the user approves" in PAPER_CLAW_SYSTEM_PROMPT
+    assert "do not use update_paper_metadata to confirm search candidates" in PAPER_CLAW_SYSTEM_PROMPT
     assert "paper_candidates_recommended" not in PAPER_CLAW_SYSTEM_PROMPT
     assert "candidate refs" not in PAPER_CLAW_SYSTEM_PROMPT
 
@@ -147,6 +153,21 @@ def test_agent_factory_constructs_without_external_model_call():
 
     assert hasattr(agent, "invoke")
     assert hasattr(agent, "stream")
+
+
+
+def test_agent_factory_interrupts_on_metadata_update(monkeypatch):
+    calls = []
+
+    def fake_create_deep_agent(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(invoke=lambda *_args, **_kwargs: None, stream=lambda *_args, **_kwargs: iter(()))
+
+    monkeypatch.setattr(main_agent_module, "create_deep_agent", fake_create_deep_agent)
+
+    create_paper_claw_agent(FakeListChatModel(responses=["ok"]))
+
+    assert calls[0]["interrupt_on"] == {"update_paper_metadata": {"allowed_decisions": ["approve", "edit", "reject"]}}
 
 
 def test_checkpoint_connection_string_uses_psycopg_driver_url():

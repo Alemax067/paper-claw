@@ -187,6 +187,8 @@ export interface SearchSessionRead {
 export interface RunDecision {
   type: RunDecisionType;
   args?: Record<string, unknown> | null;
+  edited_action?: { name: string; args: Record<string, unknown> } | null;
+  message?: string | null;
 }
 
 export interface ApprovalRequest {

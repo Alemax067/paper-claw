@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from backend.db.models import Paper, PaperIdentifier, PaperSourceRecord
 from backend.db.repositories import PaperRepository
 from backend.db.types import IdentifierType, PaperSource
-from backend.schemas import PaperIdentifierInput, PaperSearchResult
+from backend.schemas import PaperIdentifierInput, PaperMetadataPatch, PaperSearchResult, PaperSourceRecordPatch
 
 _DOI_PREFIX_RE = re.compile(r"^(?:https?://(?:dx\.)?doi\.org/|doi:\s*)", re.IGNORECASE)
 _ARXIV_PREFIX_RE = re.compile(r"^(?:https?://arxiv\.org/(?:abs|pdf)/|arxiv:\s*)", re.IGNORECASE)
@@ -129,6 +129,94 @@ def upsert_paper_from_search_result(session: Session, result: PaperSearchResult)
     _upsert_paper_links(session, paper, result, identifiers)
     session.flush()
     return paper
+
+
+def update_paper_metadata(
+    session: Session,
+    *,
+    paper_id: int,
+    metadata: PaperMetadataPatch | None = None,
+    identifiers: list[PaperIdentifierInput] | None = None,
+    source_records: list[PaperSourceRecordPatch] | None = None,
+    reason: str | None = None,
+) -> dict:
+    paper = session.get(Paper, paper_id)
+    if paper is None:
+        raise ValueError(f"Paper {paper_id} not found")
+
+    metadata = metadata or PaperMetadataPatch()
+    identifiers = identifiers or []
+    source_records = source_records or []
+    field_values = metadata.model_dump(exclude_none=True)
+    if not field_values and not identifiers and not source_records:
+        raise ValueError("At least one metadata field, identifier, or source record is required")
+
+    changed_fields = _apply_paper_metadata_patch(paper, field_values)
+    repo = PaperRepository(session)
+    identifiers_upserted = []
+    for identifier in identifiers:
+        normalized_value = normalize_identifier(identifier.identifier_type, identifier.identifier_value)
+        row = repo.upsert_identifier(
+            paper.id,
+            identifier.identifier_type,
+            normalized_value,
+            is_primary=identifier.is_primary,
+        )
+        identifiers_upserted.append(
+            {
+                "id": row.id,
+                "identifier_type": row.identifier_type,
+                "identifier_value": row.identifier_value,
+                "is_primary": row.is_primary,
+            }
+        )
+
+    source_records_upserted = []
+    for source_record in source_records:
+        row = repo.upsert_source_record(
+            paper.id,
+            source_record.source,
+            source_record.source_record_id,
+            source_url=source_record.source_url,
+            retrieved_at=datetime.now().astimezone(),
+            is_primary=source_record.is_primary,
+            raw_json=source_record.raw,
+        )
+        source_records_upserted.append(
+            {
+                "id": row.id,
+                "source": row.source,
+                "source_record_id": row.source_record_id,
+                "source_url": row.source_url,
+                "is_primary": row.is_primary,
+            }
+        )
+
+    session.flush()
+    changed = bool(changed_fields or identifiers_upserted or source_records_upserted)
+    return {
+        "status": "updated" if changed else "no_change",
+        "paper_id": paper.id,
+        "changed_fields": changed_fields,
+        "identifiers_upserted": identifiers_upserted,
+        "source_records_upserted": source_records_upserted,
+        "reason": reason,
+    }
+
+
+
+def _apply_paper_metadata_patch(paper: Paper, field_values: dict[str, object]) -> list[dict[str, object]]:
+    changed_fields = []
+    field_map = {"authors": "authors_json"}
+    for field, new_value in field_values.items():
+        attr = field_map.get(field, field)
+        old_value = getattr(paper, attr)
+        if old_value == new_value:
+            continue
+        setattr(paper, attr, new_value)
+        changed_fields.append({"field": field, "old": old_value, "new": new_value})
+    return changed_fields
+
 
 
 def _identifier_matches(session: Session, query: str, mode: str) -> list[tuple[Paper, str]]:

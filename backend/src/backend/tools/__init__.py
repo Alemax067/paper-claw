@@ -7,6 +7,7 @@ from backend.tools.paper_acquisition import (
     register_local_paper_source,
 )
 from backend.tools.paper_parsing import ingest_paper_document, parse_paper, process_paper_document
+from backend.tools.paper_metadata import update_paper_metadata
 from backend.tools.paper_qa import embed_paper_chunks, retrieve_paper_evidence
 from backend.tools.paper_reports import generate_paper_report
 from backend.tools.paper_search import confirm_paper_candidate, get_paper, search_papers
@@ -21,6 +22,7 @@ MAIN_AGENT_TOOLS = [
     list_paper_artifacts,
     list_paper_reports,
     confirm_paper_candidate,
+    update_paper_metadata,
 ]
 
 DISCOVERY_AGENT_TOOLS = [
@@ -78,4 +80,5 @@ __all__ = [
     "search_local_papers",
     "search_papers",
     "set_thread_focus",
+    "update_paper_metadata",
 ]

@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from backend.agents.runner import mark_stale_running_run_failed
 from backend.api.deps import get_db_session
 from backend.api.serializers import memory_read, paper_detail, paper_summary, report_read, report_summary, run_read, search_session_read, thread_detail, thread_summary
 from backend.db.models import AgentRun, Paper, PaperArtifact, Report, SearchSession, Thread
@@ -38,6 +39,8 @@ def get_thread(thread_id: int, session: Session = Depends(get_db_session)) -> Th
     )
     if thread is None:
         raise HTTPException(status_code=404, detail="Thread not found")
+    for run in thread.agent_runs:
+        mark_stale_running_run_failed(session, run)
     return thread_detail(thread)
 
 
@@ -46,6 +49,7 @@ def get_run(run_id: int, session: Session = Depends(get_db_session)) -> RunRead:
     run = session.scalar(select(AgentRun).where(AgentRun.id == run_id).options(selectinload(AgentRun.events)))
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
+    mark_stale_running_run_failed(session, run)
     return run_read(run)
 
 
