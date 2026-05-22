@@ -221,3 +221,116 @@ export interface UploadArtifactRequest {
   role: ArtifactUploadRole;
   runId?: number | null;
 }
+
+export interface ArxivTaskDailyConfigRead {
+  id: number;
+  enabled: boolean;
+  run_time: string;
+  last_started_at: string | null;
+  last_finished_at: string | null;
+  metadata: JsonObject;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ArxivTaskDailyConfigUpdateRequest {
+  enabled: boolean;
+  run_time: string;
+}
+
+export interface ArxivTaskCategoryRead {
+  id: number;
+  cat_id: string;
+  top_area: string;
+  group: string | null;
+  group_code: string | null;
+  archive: string;
+  name: string;
+  description: string | null;
+  is_alias: boolean;
+  alias_of: string | null;
+  api_exact_query: string;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ArxivTaskCategoryUpdateRequest {
+  enabled_cat_ids: string[];
+}
+
+export interface ArxivTaskPaperRead {
+  id: number;
+  arxiv_id: string;
+  arxiv_base_id: string;
+  title: string;
+  abstract: string | null;
+  authors: unknown[];
+  primary_category: string | null;
+  categories: unknown[];
+  published_at: string | null;
+  updated_at_source: string | null;
+  landing_page_url: string | null;
+  pdf_url: string | null;
+  comment: string | null;
+  journal_ref: string | null;
+  doi: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ArxivTaskQueryWindowRead {
+  id: number;
+  cat_id: string;
+  job_id: number | null;
+  kind: string;
+  window_start: string;
+  window_end: string;
+  status: string;
+  total_results: number | null;
+  fetched_count: number;
+  inserted_count: number;
+  updated_count: number;
+  page_size: number;
+  page_count: number;
+  error_message: string | null;
+  warning_code: string | null;
+  parent_window_id: number | null;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ArxivTaskHarvestJobRead {
+  id: number;
+  kind: string;
+  status: string;
+  cat_ids: string[];
+  requested_start: string | null;
+  requested_end: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  error_message: string | null;
+  stats: Record<string, number>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ArxivTaskHistoryJobCreateRequest {
+  cat_ids: string[];
+  start_time: string;
+  end_time: string;
+}
+
+export interface ArxivTaskStatusRead {
+  daily_config: ArxivTaskDailyConfigRead;
+  categories: ArxivTaskCategoryRead[];
+  enabled_cat_ids: string[];
+  coverage_cat_ids: string[];
+  active_job: ArxivTaskHarvestJobRead | null;
+  recent_jobs: ArxivTaskHarvestJobRead[];
+  recent_windows: ArxivTaskQueryWindowRead[];
+  recent_papers: ArxivTaskPaperRead[];
+  total_papers: number;
+}

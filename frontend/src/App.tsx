@@ -8,6 +8,7 @@ import { ReportReader } from './features/reports/ReportReader';
 import { ChatPage } from './features/chat/ChatPage';
 import { MemoryPage } from './features/memory/MemoryPage';
 import { SettingPage } from './features/settings/SettingPage';
+import { ArxivTaskPage } from './features/tasks/ArxivTaskPage';
 import type { RunRead } from './api/types';
 
 export function App() {
@@ -175,15 +176,7 @@ export function App() {
     }
 
     if (activePage === 'task') {
-      return (
-        <main className="empty-workspace task-page">
-          <div className="empty-state">
-            <p className="eyebrow">Task</p>
-            <h3>Task workspace</h3>
-            <p>This page is intentionally empty while task semantics are still being designed.</p>
-          </div>
-        </main>
-      );
+      return <ArxivTaskPage />;
     }
 
     return <SettingPage />;

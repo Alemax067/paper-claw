@@ -311,6 +311,119 @@ class ReportRead(ReportSummary):
     evidence: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class ArxivTaskDailyConfigRead(BaseModel):
+    id: int
+    enabled: bool
+    run_time: str
+    last_started_at: datetime | None = None
+    last_finished_at: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+
+
+class ArxivTaskDailyConfigUpdateRequest(BaseModel):
+    enabled: bool = True
+    run_time: str
+
+
+class ArxivTaskCategoryRead(BaseModel):
+    id: int
+    cat_id: str
+    top_area: str
+    group: str | None = None
+    group_code: str | None = None
+    archive: str
+    name: str
+    description: str | None = None
+    is_alias: bool
+    alias_of: str | None = None
+    api_exact_query: str
+    enabled: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class ArxivTaskCategoryUpdateRequest(BaseModel):
+    enabled_cat_ids: list[str] = Field(default_factory=list)
+
+
+class ArxivTaskPaperRead(BaseModel):
+    id: int
+    arxiv_id: str
+    arxiv_base_id: str
+    title: str
+    abstract: str | None = None
+    authors: list[Any] = Field(default_factory=list)
+    primary_category: str | None = None
+    categories: list[str] = Field(default_factory=list)
+    published_at: datetime | None = None
+    updated_at_source: datetime | None = None
+    landing_page_url: str | None = None
+    pdf_url: str | None = None
+    comment: str | None = None
+    journal_ref: str | None = None
+    doi: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ArxivTaskQueryWindowRead(BaseModel):
+    id: int
+    cat_id: str
+    job_id: int | None = None
+    kind: str
+    window_start: datetime
+    window_end: datetime
+    status: str
+    total_results: int | None = None
+    fetched_count: int
+    inserted_count: int
+    updated_count: int
+    page_size: int | None = None
+    page_count: int
+    error_message: str | None = None
+    warning_code: str | None = None
+    parent_window_id: int | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ArxivTaskHarvestJobRead(BaseModel):
+    id: int
+    kind: str
+    status: str
+    cat_ids: list[str] = Field(default_factory=list)
+    requested_start: datetime | None = None
+    requested_end: datetime | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    error_message: str | None = None
+    stats: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+
+
+class ArxivTaskHistoryJobCreateRequest(BaseModel):
+    cat_ids: list[str]
+    start_time: datetime
+    end_time: datetime
+
+
+class ArxivTaskStatusRead(BaseModel):
+    daily_config: ArxivTaskDailyConfigRead
+    categories: list[ArxivTaskCategoryRead] = Field(default_factory=list)
+    enabled_cat_ids: list[str] = Field(default_factory=list)
+    coverage_cat_ids: list[str] = Field(default_factory=list)
+    active_job: ArxivTaskHarvestJobRead | None = None
+    recent_jobs: list[ArxivTaskHarvestJobRead] = Field(default_factory=list)
+    recent_windows: list[ArxivTaskQueryWindowRead] = Field(default_factory=list)
+    recent_papers: list[ArxivTaskPaperRead] = Field(default_factory=list)
+    total_papers: int
+
+
 @dataclass(frozen=True)
 class PaperClawContext:
     thread_id: int | None = None

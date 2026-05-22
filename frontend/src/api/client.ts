@@ -12,6 +12,15 @@ import type {
   RunEventRead,
   RunRead,
   RuntimeSettingsRead,
+  ArxivTaskCategoryRead,
+  ArxivTaskCategoryUpdateRequest,
+  ArxivTaskDailyConfigRead,
+  ArxivTaskDailyConfigUpdateRequest,
+  ArxivTaskHarvestJobRead,
+  ArxivTaskHistoryJobCreateRequest,
+  ArxivTaskPaperRead,
+  ArxivTaskQueryWindowRead,
+  ArxivTaskStatusRead,
   MemoryRead,
   ThreadDetail,
   ThreadSummary,
@@ -146,5 +155,42 @@ export const api = {
       method: 'POST',
       body: formData,
     });
+  },
+
+  getArxivTaskStatus: () => requestJson<ArxivTaskStatusRead>('/api/tasks/arxiv/status', { cache: 'no-store' }),
+  getArxivTaskDailyConfig: () => requestJson<ArxivTaskDailyConfigRead>('/api/tasks/arxiv/daily-config', { cache: 'no-store' }),
+  updateArxivTaskDailyConfig: (request: ArxivTaskDailyConfigUpdateRequest) =>
+    requestJson<ArxivTaskDailyConfigRead>('/api/tasks/arxiv/daily-config', {
+      method: 'PUT',
+      body: JSON.stringify(request),
+    }),
+  listArxivTaskCategories: () => requestJson<ArxivTaskCategoryRead[]>('/api/tasks/arxiv/categories', { cache: 'no-store' }),
+  updateArxivTaskCategories: (request: ArxivTaskCategoryUpdateRequest) =>
+    requestJson<ArxivTaskCategoryRead[]>('/api/tasks/arxiv/categories', {
+      method: 'PUT',
+      body: JSON.stringify(request),
+    }),
+  runArxivTaskDailyNow: () => requestJson<ArxivTaskHarvestJobRead>('/api/tasks/arxiv/daily/run', { method: 'POST' }),
+  createArxivTaskHistoryJob: (request: ArxivTaskHistoryJobCreateRequest) =>
+    requestJson<ArxivTaskHarvestJobRead>('/api/tasks/arxiv/history-jobs', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    }),
+  startArxivTaskHistoryJob: (jobId: number) => requestJson<ArxivTaskHarvestJobRead>(`/api/tasks/arxiv/history-jobs/${jobId}/start`, { method: 'POST' }),
+  pauseArxivTaskHistoryJob: (jobId: number) => requestJson<ArxivTaskHarvestJobRead>(`/api/tasks/arxiv/history-jobs/${jobId}/pause`, { method: 'POST' }),
+  stopArxivTaskHistoryJob: (jobId: number) => requestJson<ArxivTaskHarvestJobRead>(`/api/tasks/arxiv/history-jobs/${jobId}/stop`, { method: 'POST' }),
+  listArxivTaskWindows: (catId?: string | null, limit = 100) => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (catId) {
+      params.set('cat_id', catId);
+    }
+    return requestJson<ArxivTaskQueryWindowRead[]>(`/api/tasks/arxiv/windows?${params.toString()}`, { cache: 'no-store' });
+  },
+  listArxivTaskPapers: (catId?: string | null, limit = 50, offset = 0) => {
+    const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+    if (catId) {
+      params.set('cat_id', catId);
+    }
+    return requestJson<ArxivTaskPaperRead[]>(`/api/tasks/arxiv/papers?${params.toString()}`, { cache: 'no-store' });
   },
 };

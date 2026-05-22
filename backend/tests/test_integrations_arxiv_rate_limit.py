@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -106,6 +106,64 @@ def test_arxiv_id_mode_uses_exact_id_lookup():
 
     assert response.query_used == "id_list:2401.00001"
     assert captured[0].id_list == ["2401.00001"]
+
+
+def test_arxiv_metadata_window_builds_submitted_date_query_and_parses_atom():
+    captured = {}
+    xml = """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+    <feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:opensearch=\"http://a9.com/-/spec/opensearch/1.1/\" xmlns:arxiv=\"http://arxiv.org/schemas/atom\">
+      <opensearch:totalResults>1</opensearch:totalResults>
+      <entry>
+        <id>https://arxiv.org/abs/2401.00001v2</id>
+        <updated>2024-01-02T00:00:00Z</updated>
+        <published>2024-01-01T00:00:00Z</published>
+        <title> A   metadata   paper </title>
+        <summary> Abstract text. </summary>
+        <author><name>Ada Lovelace</name></author>
+        <arxiv:primary_category term=\"cs.LG\" />
+        <category term=\"cs.LG\" />
+        <category term=\"cs.AI\" />
+        <link rel=\"alternate\" href=\"https://arxiv.org/abs/2401.00001v2\" />
+        <link title=\"pdf\" href=\"https://arxiv.org/pdf/2401.00001v2\" />
+        <arxiv:doi>10.0000/example</arxiv:doi>
+        <arxiv:comment>12 pages</arxiv:comment>
+      </entry>
+    </feed>
+    """
+    fake_response = SimpleNamespace(text=xml, raise_for_status=lambda: None)
+
+    def get(url, params):
+        captured["url"] = url
+        captured["params"] = params
+        return fake_response
+
+    client = ArxivClient(limiter=ArxivRateLimiter(min_interval_seconds=0), http_client=SimpleNamespace(get=get))
+    start = datetime(2024, 1, 1, tzinfo=UTC)
+    end = start + timedelta(hours=12)
+
+    response = client.query_metadata_window("cs.LG", start, end, page_size=500, offset=10)
+
+    assert captured["url"] == "https://export.arxiv.org/api/query"
+    assert captured["params"]["search_query"] == "cat:cs.LG AND submittedDate:[202401010000 TO 202401011200]"
+    assert captured["params"]["max_results"] == 200
+    assert captured["params"]["start"] == 10
+    assert captured["params"]["sortBy"] == "submittedDate"
+    assert response.total_results == 1
+    entry = response.entries[0]
+    assert entry.arxiv_id == "2401.00001v2"
+    assert entry.arxiv_base_id == "2401.00001"
+    assert entry.title == "A metadata paper"
+    assert entry.authors == ["Ada Lovelace"]
+    assert entry.categories == ["cs.LG", "cs.AI"]
+    assert entry.pdf_url == "https://arxiv.org/pdf/2401.00001v2"
+
+
+def test_arxiv_metadata_window_rejects_windows_over_one_day():
+    client = ArxivClient(limiter=ArxivRateLimiter(min_interval_seconds=0))
+    start = datetime(2024, 1, 1, tzinfo=UTC)
+
+    with pytest.raises(ValueError, match="cannot exceed one day"):
+        client.query_metadata_window("cs.LG", start, start + timedelta(days=1, minutes=1))
 
 
 def test_arxiv_offset_and_max_results_are_applied():

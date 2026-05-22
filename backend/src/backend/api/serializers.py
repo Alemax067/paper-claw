@@ -1,7 +1,13 @@
 from __future__ import annotations
 
-from backend.db.models import AgentRun, AgentRunEvent, Artifact, Memory, Message, Paper, Report, SearchCandidate, SearchSession, Thread
+from backend.db.models import AgentRun, AgentRunEvent, ArxivTaskCategory, ArxivTaskDailyConfig, ArxivTaskHarvestJob, ArxivTaskPaper, ArxivTaskQueryWindow, Artifact, Memory, Message, Paper, Report, SearchCandidate, SearchSession, Thread
 from backend.schemas import (
+    ArxivTaskCategoryRead,
+    ArxivTaskDailyConfigRead,
+    ArxivTaskHarvestJobRead,
+    ArxivTaskPaperRead,
+    ArxivTaskQueryWindowRead,
+    ArxivTaskStatusRead,
     ArtifactRead,
     MemoryRead,
     MessageRead,
@@ -222,6 +228,116 @@ def report_summary(report: Report) -> ReportSummary:
         source_scope=report.source_scope,
         created_at=report.created_at,
         updated_at=report.updated_at,
+    )
+
+
+def arxiv_task_daily_config_read(config: ArxivTaskDailyConfig) -> ArxivTaskDailyConfigRead:
+    return ArxivTaskDailyConfigRead(
+        id=config.id,
+        enabled=config.status == "enabled",
+        run_time=config.run_time,
+        last_started_at=config.last_started_at,
+        last_finished_at=config.last_finished_at,
+        metadata=config.metadata_json or {},
+        created_at=config.created_at,
+        updated_at=config.updated_at,
+    )
+
+
+def arxiv_task_category_read(category: ArxivTaskCategory) -> ArxivTaskCategoryRead:
+    return ArxivTaskCategoryRead(
+        id=category.id,
+        cat_id=category.cat_id,
+        top_area=category.top_area,
+        group=category.group,
+        group_code=category.group_code,
+        archive=category.archive,
+        name=category.name,
+        description=category.description,
+        is_alias=category.is_alias,
+        alias_of=category.alias_of,
+        api_exact_query=category.api_exact_query,
+        enabled=category.enabled,
+        created_at=category.created_at,
+        updated_at=category.updated_at,
+    )
+
+
+def arxiv_task_paper_read(paper: ArxivTaskPaper) -> ArxivTaskPaperRead:
+    return ArxivTaskPaperRead(
+        id=paper.id,
+        arxiv_id=paper.arxiv_id,
+        arxiv_base_id=paper.arxiv_base_id,
+        title=paper.title,
+        abstract=paper.abstract,
+        authors=list(paper.authors_json or []),
+        primary_category=paper.primary_category,
+        categories=list(paper.categories_json or []),
+        published_at=paper.published_at,
+        updated_at_source=paper.updated_at_source,
+        landing_page_url=paper.landing_page_url,
+        pdf_url=paper.pdf_url,
+        comment=paper.comment,
+        journal_ref=paper.journal_ref,
+        doi=paper.doi,
+        created_at=paper.created_at,
+        updated_at=paper.updated_at,
+    )
+
+
+def arxiv_task_window_read(window: ArxivTaskQueryWindow) -> ArxivTaskQueryWindowRead:
+    return ArxivTaskQueryWindowRead(
+        id=window.id,
+        cat_id=window.cat_id,
+        job_id=window.job_id,
+        kind=window.kind,
+        window_start=window.window_start,
+        window_end=window.window_end,
+        status=window.status,
+        total_results=window.total_results,
+        fetched_count=window.fetched_count,
+        inserted_count=window.inserted_count,
+        updated_count=window.updated_count,
+        page_size=window.page_size,
+        page_count=window.page_count,
+        error_message=window.error_message,
+        warning_code=window.warning_code,
+        parent_window_id=window.parent_window_id,
+        started_at=window.started_at,
+        finished_at=window.finished_at,
+        created_at=window.created_at,
+        updated_at=window.updated_at,
+    )
+
+
+def arxiv_task_job_read(job: ArxivTaskHarvestJob) -> ArxivTaskHarvestJobRead:
+    return ArxivTaskHarvestJobRead(
+        id=job.id,
+        kind=job.kind,
+        status=job.status,
+        cat_ids=[str(cat_id) for cat_id in job.cat_ids_json or []],
+        requested_start=job.requested_start,
+        requested_end=job.requested_end,
+        started_at=job.started_at,
+        finished_at=job.finished_at,
+        error_message=job.error_message,
+        stats=job.stats_json or {},
+        created_at=job.created_at,
+        updated_at=job.updated_at,
+    )
+
+
+def arxiv_task_status_read(*, daily_config: ArxivTaskDailyConfig, categories: list[ArxivTaskCategory], coverage_cat_ids: list[str], active_job: ArxivTaskHarvestJob | None, recent_jobs: list[ArxivTaskHarvestJob], recent_windows: list[ArxivTaskQueryWindow], recent_papers: list[ArxivTaskPaper], total_papers: int) -> ArxivTaskStatusRead:
+    return ArxivTaskStatusRead(
+        daily_config=arxiv_task_daily_config_read(daily_config),
+        categories=[arxiv_task_category_read(category) for category in categories],
+        enabled_cat_ids=[category.cat_id for category in categories if category.enabled],
+        coverage_cat_ids=coverage_cat_ids,
+        active_job=arxiv_task_job_read(active_job) if active_job is not None else None,
+        recent_jobs=[arxiv_task_job_read(job) for job in recent_jobs],
+        recent_windows=[arxiv_task_window_read(window) for window in recent_windows],
+        recent_papers=[arxiv_task_paper_read(paper) for paper in recent_papers],
+        total_papers=total_papers,
     )
 
 

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import re
 import time
+import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -17,6 +19,34 @@ from backend.services.papers import normalize_identifier
 
 _ARXIV_ID_RE = re.compile(r"(?:arxiv:\s*|arxiv\.org/(?:abs|pdf)/)?(?P<id>\d{4}\.\d{4,5}(?:v\d+)?)", re.IGNORECASE)
 _DOI_PREFIX_RE = re.compile(r"^(?:https?://(?:dx\.)?doi\.org/|doi:\s*)", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class ArxivMetadataEntry:
+    arxiv_id: str
+    arxiv_base_id: str
+    title: str
+    abstract: str | None
+    authors: list[str]
+    primary_category: str | None
+    categories: list[str]
+    published_at: datetime | None
+    updated_at: datetime | None
+    landing_page_url: str | None
+    pdf_url: str | None
+    doi: str | None
+    journal_ref: str | None
+    comment: str | None
+    raw: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ArxivMetadataQueryResponse:
+    query_used: str
+    total_results: int
+    start: int
+    page_size: int
+    entries: list[ArxivMetadataEntry]
 
 
 @dataclass
@@ -75,6 +105,43 @@ class ArxivClient:
             results = results[offset:]
         return PaperSourceSearchResponse(results=[self._to_search_result(result) for result in results[:max_results]], query_used=query_used, warnings=warnings)
 
+    def query_metadata_window(
+        self,
+        cat_id: str,
+        start_time: datetime,
+        end_time: datetime,
+        *,
+        page_size: int = 100,
+        offset: int = 0,
+    ) -> ArxivMetadataQueryResponse:
+        cat_id = _validate_cat_id(cat_id)
+        start_time = _as_utc(start_time)
+        end_time = _as_utc(end_time)
+        if end_time <= start_time:
+            raise ValueError("arXiv metadata window end_time must be after start_time")
+        if end_time - start_time > timedelta(days=1):
+            raise ValueError("arXiv metadata window cannot exceed one day")
+        page_size = max(1, min(page_size, 200))
+        offset = max(0, offset)
+        query = f"cat:{cat_id} AND submittedDate:[{_arxiv_datetime(start_time)} TO {_arxiv_datetime(end_time)}]"
+
+        def fetch() -> httpx.Response:
+            response = self.http_client.get(
+                "https://export.arxiv.org/api/query",
+                params={
+                    "search_query": query,
+                    "start": offset,
+                    "max_results": page_size,
+                    "sortBy": "submittedDate",
+                    "sortOrder": "ascending",
+                },
+            )
+            response.raise_for_status()
+            return response
+
+        response = self._with_retry(fetch)
+        return _parse_metadata_response(response.text, query, offset, page_size)
+
     def download_pdf(self, pdf_url: str, destination: Path) -> Path:
         return self._download(pdf_url, destination)
 
@@ -132,6 +199,20 @@ class ArxivClient:
         )
 
 
+def arxiv_base_id(value: str) -> str:
+    return normalize_arxiv_id(value)
+
+
+def normalize_arxiv_id_with_version(value: str) -> str:
+    match = _ARXIV_ID_RE.search(value.strip())
+    if match is not None:
+        return match.group("id")
+    candidate = value.strip().removesuffix(".pdf")
+    if re.fullmatch(r"\d{4}\.\d{4,5}(?:v\d+)?", candidate):
+        return candidate
+    return normalize_arxiv_id(candidate)
+
+
 def normalize_arxiv_id(value: str) -> str:
     arxiv_id = _extract_arxiv_id(value)
     if arxiv_id is not None:
@@ -143,6 +224,101 @@ def normalize_arxiv_id(value: str) -> str:
     if not normalized or not re.fullmatch(r"\d{4}\.\d{4,5}", normalized):
         raise ValueError(f"Invalid arXiv id: {value}")
     return normalized
+
+
+def _validate_cat_id(cat_id: str) -> str:
+    stripped = cat_id.strip()
+    if not re.fullmatch(r"[a-z-]+(?:\.[A-Z]{2})?", stripped):
+        raise ValueError(f"Invalid arXiv category id: {cat_id}")
+    return stripped
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _arxiv_datetime(value: datetime) -> str:
+    return _as_utc(value).strftime("%Y%m%d%H%M")
+
+
+def _parse_metadata_response(xml_text: str, query_used: str, start: int, page_size: int) -> ArxivMetadataQueryResponse:
+    root = ET.fromstring(xml_text)
+    namespaces = {
+        "atom": "http://www.w3.org/2005/Atom",
+        "opensearch": "http://a9.com/-/spec/opensearch/1.1/",
+        "arxiv": "http://arxiv.org/schemas/atom",
+    }
+    total_results = _int_text(root.findtext("opensearch:totalResults", namespaces=namespaces))
+    entries = [_parse_metadata_entry(entry, namespaces) for entry in root.findall("atom:entry", namespaces)]
+    return ArxivMetadataQueryResponse(query_used=query_used, total_results=total_results, start=start, page_size=page_size, entries=entries)
+
+
+def _parse_metadata_entry(entry: ET.Element, namespaces: dict[str, str]) -> ArxivMetadataEntry:
+    entry_id = _text(entry.findtext("atom:id", namespaces=namespaces))
+    arxiv_id = normalize_arxiv_id_with_version(entry_id or "")
+    categories = [category.attrib.get("term", "").strip() for category in entry.findall("atom:category", namespaces) if category.attrib.get("term")]
+    primary = entry.find("arxiv:primary_category", namespaces)
+    primary_category = primary.attrib.get("term") if primary is not None else categories[0] if categories else None
+    links = entry.findall("atom:link", namespaces)
+    landing_page_url = entry_id
+    pdf_url = None
+    for link in links:
+        if link.attrib.get("title") == "pdf" or link.attrib.get("type") == "application/pdf":
+            pdf_url = link.attrib.get("href")
+        elif link.attrib.get("rel") == "alternate" and link.attrib.get("href"):
+            landing_page_url = link.attrib.get("href")
+    raw = {
+        "entry_id": entry_id,
+        "links": [dict(link.attrib) for link in links],
+        "primary_category": primary_category,
+        "categories": categories,
+        "published": _text(entry.findtext("atom:published", namespaces=namespaces)),
+        "updated": _text(entry.findtext("atom:updated", namespaces=namespaces)),
+    }
+    return ArxivMetadataEntry(
+        arxiv_id=arxiv_id,
+        arxiv_base_id=arxiv_base_id(arxiv_id),
+        title=_collapse_space(_text(entry.findtext("atom:title", namespaces=namespaces)) or "Untitled arXiv paper"),
+        abstract=_collapse_space(_text(entry.findtext("atom:summary", namespaces=namespaces)) or "") or None,
+        authors=[_collapse_space(_text(author.findtext("atom:name", namespaces=namespaces)) or "") for author in entry.findall("atom:author", namespaces) if _text(author.findtext("atom:name", namespaces=namespaces))],
+        primary_category=primary_category,
+        categories=categories,
+        published_at=_datetime_text(entry.findtext("atom:published", namespaces=namespaces)),
+        updated_at=_datetime_text(entry.findtext("atom:updated", namespaces=namespaces)),
+        landing_page_url=landing_page_url,
+        pdf_url=pdf_url,
+        doi=_text(entry.findtext("arxiv:doi", namespaces=namespaces)),
+        journal_ref=_text(entry.findtext("arxiv:journal_ref", namespaces=namespaces)),
+        comment=_text(entry.findtext("arxiv:comment", namespaces=namespaces)),
+        raw=raw,
+    )
+
+
+def _text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _collapse_space(value: str) -> str:
+    return " ".join(value.split())
+
+
+def _int_text(value: str | None) -> int:
+    try:
+        return int(value or 0)
+    except ValueError:
+        return 0
+
+
+def _datetime_text(value: str | None) -> datetime | None:
+    text = _text(value)
+    if text is None:
+        return None
+    return datetime.fromisoformat(text.replace("Z", "+00:00"))
 
 
 def _arxiv_query(query: str, mode: str, warnings: list[str]) -> tuple[str, list[str] | None]:

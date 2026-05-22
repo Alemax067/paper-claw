@@ -234,6 +234,37 @@ class EvidenceType(StrEnum):
     external = "external"
 
 
+class ArxivTaskDailyStatus(StrEnum):
+    enabled = "enabled"
+    disabled = "disabled"
+
+
+class ArxivTaskJobKind(StrEnum):
+    daily = "daily"
+    history = "history"
+    manual = "manual"
+
+
+class ArxivTaskJobStatus(StrEnum):
+    pending = "pending"
+    running = "running"
+    paused = "paused"
+    stopping = "stopping"
+    stopped = "stopped"
+    succeeded = "succeeded"
+    failed = "failed"
+
+
+class ArxivTaskWindowStatus(StrEnum):
+    pending = "pending"
+    running = "running"
+    succeeded = "succeeded"
+    failed = "failed"
+    split = "split"
+    partial = "partial"
+    skipped = "skipped"
+
+
 class MemoryType(StrEnum):
     user_preference = "user_preference"
     instruction = "instruction"
