@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 
 export type AppPage = 'chat' | 'paper' | 'report' | 'memory' | 'task' | 'setting';
 export type NavMode = 'icon' | 'title';
@@ -22,6 +22,10 @@ const navItems: Array<{ id: AppPage; label: string; icon: string }> = [
   { id: 'setting', label: 'Setting', icon: 'S' },
 ];
 
+function activePageLabel(activePage: AppPage): string {
+  return navItems.find((item) => item.id === activePage)?.label ?? 'Workspace';
+}
+
 export function AppShell({
   activePage,
   navMode,
@@ -32,19 +36,101 @@ export function AppShell({
   children,
 }: AppShellProps) {
   const expanded = navMode === 'title';
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [isMobileNavViewport, setIsMobileNavViewport] = useState(() => {
+    if (typeof window === 'undefined') {
+      return false;
+    }
+
+    return window.matchMedia('(max-width: 760px)').matches;
+  });
+  const menuButtonRef = useRef<HTMLButtonElement | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const isMobileNavModal = mobileNavOpen && isMobileNavViewport;
+  const wasMobileNavModalRef = useRef(isMobileNavModal);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(max-width: 760px)');
+
+    const updateMobileNavViewport = (event: MediaQueryListEvent | MediaQueryList) => {
+      setIsMobileNavViewport(event.matches);
+      if (!event.matches) {
+        setMobileNavOpen(false);
+      }
+    };
+
+    updateMobileNavViewport(mediaQuery);
+    mediaQuery.addEventListener('change', updateMobileNavViewport);
+
+    return () => {
+      mediaQuery.removeEventListener('change', updateMobileNavViewport);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (isMobileNavModal) {
+      closeButtonRef.current?.focus();
+    }
+
+    if (wasMobileNavModalRef.current && !isMobileNavModal && isMobileNavViewport) {
+      menuButtonRef.current?.focus();
+    }
+
+    wasMobileNavModalRef.current = isMobileNavModal;
+  }, [isMobileNavModal, isMobileNavViewport]);
+
+  const closeMobileNavOnEscape = (event: KeyboardEvent) => {
+    if (event.key === 'Escape') {
+      setMobileNavOpen(false);
+    }
+  };
+
+  const selectPage = (page: AppPage) => {
+    onSelectPage(page);
+    setMobileNavOpen(false);
+  };
 
   return (
     <div className={`app-shell app-shell--${navMode}`}>
-      <aside className={`activity-bar activity-bar--${navMode}`} aria-label="Primary navigation">
+      <header className="mobile-top-bar" inert={isMobileNavModal ? true : undefined}>
+        <button ref={menuButtonRef} className="mobile-menu-button" type="button" onClick={() => setMobileNavOpen(true)} aria-label="Open navigation">
+          Menu
+        </button>
+        <div>
+          <p className="eyebrow">Paper Claw</p>
+          <strong>{activePageLabel(activePage)}</strong>
+        </div>
+      </header>
+      {isMobileNavModal && (
+        <button
+          className="mobile-nav-backdrop"
+          type="button"
+          aria-label="Close navigation"
+          onClick={() => setMobileNavOpen(false)}
+          onKeyDown={closeMobileNavOnEscape}
+        />
+      )}
+      <aside
+        className={`activity-bar activity-bar--${navMode} ${isMobileNavModal ? 'is-mobile-open' : ''}`}
+        aria-label="Primary navigation"
+        onKeyDown={closeMobileNavOnEscape}
+      >
         <div className="activity-bar__brand">
           <span className="activity-bar__mark">PC</span>
-          {expanded && (
-            <div>
-              <p className="eyebrow">Paper Claw</p>
-              <strong>Workspace</strong>
-            </div>
-          )}
+          <div className="activity-bar__brand-text">
+            <p className="eyebrow">Paper Claw</p>
+            <strong>Workspace</strong>
+          </div>
         </div>
+        <button
+          ref={closeButtonRef}
+          className="activity-bar__mobile-close"
+          type="button"
+          onClick={() => setMobileNavOpen(false)}
+          aria-label="Close navigation"
+        >
+          Close
+        </button>
         <button
           className="activity-bar__toggle"
           type="button"
@@ -59,7 +145,7 @@ export function AppShell({
               className={`activity-item ${activePage === item.id ? 'is-active' : ''}`}
               type="button"
               key={item.id}
-              onClick={() => onSelectPage(item.id)}
+              onClick={() => selectPage(item.id)}
               aria-current={activePage === item.id ? 'page' : undefined}
               aria-label={expanded ? undefined : item.label}
               title={item.label}
@@ -67,7 +153,7 @@ export function AppShell({
               <span className="activity-item__icon" aria-hidden="true">
                 {item.icon}
               </span>
-              {expanded && <span>{item.label}</span>}
+              <span className="activity-item__label">{item.label}</span>
             </button>
           ))}
         </nav>
@@ -76,7 +162,9 @@ export function AppShell({
           <span title={activePaperLabel}>{activePaperLabel}</span>
         </div>
       </aside>
-      <main className="page-frame">{children}</main>
+      <main className="page-frame" inert={isMobileNavModal ? true : undefined}>
+        {children}
+      </main>
     </div>
   );
 }

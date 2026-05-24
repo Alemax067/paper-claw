@@ -17,6 +17,8 @@ export function App() {
   const [selectedThreadId, setSelectedThreadId] = useState<number | null>(() => storedNumber('paper-claw:selected-thread-id'));
   const [selectedPaperId, setSelectedPaperId] = useState<number | null>(null);
   const [selectedReportId, setSelectedReportId] = useState<number | null>(null);
+  const [paperMobilePane, setPaperMobilePane] = useState<'list' | 'detail'>('list');
+  const [reportMobilePane, setReportMobilePane] = useState<'list' | 'detail'>('list');
   const [activeRunIdByThreadId, setActiveRunIdByThreadId] = useState<Record<number, number>>(() => {
     const storedRunId = storedNumber('paper-claw:active-run-id');
     return selectedThreadId != null && storedRunId != null ? { [selectedThreadId]: storedRunId } : {};
@@ -40,6 +42,16 @@ export function App() {
   }, [activeRunId]);
 
   const requestRefresh = useCallback(() => setRefreshToken((value) => value + 1), []);
+  const selectPaper = useCallback((paperId: number) => {
+    setSelectedPaperId(paperId);
+    setPaperMobilePane('detail');
+  }, []);
+
+  const selectReport = useCallback((reportId: number) => {
+    setSelectedReportId(reportId);
+    setReportMobilePane('detail');
+  }, []);
+
   const onRunSelected = useCallback((runId: number | null, threadId?: number | null) => {
     const targetThreadId = threadId ?? selectedThreadId;
     if (targetThreadId == null) {
@@ -78,7 +90,13 @@ export function App() {
     }
     try {
       await api.deleteReport(reportId);
-      setSelectedReportId((current) => (current === reportId ? null : current));
+      setSelectedReportId((current) => {
+        if (current !== reportId) {
+          return current;
+        }
+        setReportMobilePane('list');
+        return null;
+      });
       requestRefresh();
       setReportError(null);
     } catch (error) {
@@ -122,18 +140,22 @@ export function App() {
 
     if (activePage === 'paper') {
       return (
-        <div className="split-page paper-page">
+        <div className={`split-page paper-page mobile-pane-${paperMobilePane}`}>
           <aside className="section-sidebar">
             <PaperArchive
               selectedPaperId={selectedPaperId}
               activePaperId={activePaperId}
               refreshToken={refreshToken}
-              onSelectPaper={setSelectedPaperId}
+              onSelectPaper={selectPaper}
               onSetActivePaper={setActivePaperId}
             />
           </aside>
           <main className="workspace-main">
+            <button className="mobile-back-button" type="button" onClick={() => setPaperMobilePane('list')}>
+              Back to papers
+            </button>
             <PaperDetail
+              key={selectedPaperId ?? 'empty-paper'}
               paperId={selectedPaperId}
               activeRunId={activeRunId}
               activePaperId={activePaperId}
@@ -142,6 +164,7 @@ export function App() {
               onSelectReport={(reportId) => {
                 setSelectedReportId(reportId);
                 setActivePage('report');
+                setReportMobilePane('detail');
               }}
               onRefresh={requestRefresh}
             />
@@ -152,17 +175,22 @@ export function App() {
 
     if (activePage === 'report') {
       return (
-        <div className="split-page report-page">
+        <div className={`split-page report-page mobile-pane-${reportMobilePane}`}>
           <aside className="section-sidebar">
-            <ReportIndex selectedReportId={selectedReportId} refreshToken={refreshToken} errorMessage={reportError} onSelectReport={setSelectedReportId} onDeleteReport={deleteReport} />
+            <ReportIndex selectedReportId={selectedReportId} refreshToken={refreshToken} errorMessage={reportError} onSelectReport={selectReport} onDeleteReport={deleteReport} />
           </aside>
           <main className="workspace-main">
+            <button className="mobile-back-button" type="button" onClick={() => setReportMobilePane('list')}>
+              Back to reports
+            </button>
             <ReportReader
+              key={selectedReportId ?? 'empty-report'}
               reportId={selectedReportId}
               onSelectPaper={(paperId) => {
                 setSelectedPaperId(paperId);
                 setActivePaperId(paperId);
                 setActivePage('paper');
+                setPaperMobilePane('detail');
               }}
               onDeleteReport={deleteReport}
             />

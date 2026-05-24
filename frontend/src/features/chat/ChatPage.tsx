@@ -42,6 +42,8 @@ export function ChatPage({
 }: ChatPageProps) {
   const [sidebarWidth, setSidebarWidth] = useState(sidebarLimits.default);
   const [dragStart, setDragStart] = useState<{ x: number; width: number } | null>(null);
+  const [mobilePane, setMobilePane] = useState<'list' | 'detail'>('list');
+  const [draftChatOpen, setDraftChatOpen] = useState(false);
 
   useEffect(() => {
     if (!dragStart) {
@@ -62,12 +64,26 @@ export function ChatPage({
     };
   }, [dragStart]);
 
+  useEffect(() => {
+    if (selectedThreadId == null && !draftChatOpen) {
+      setMobilePane('list');
+    }
+  }, [draftChatOpen, selectedThreadId]);
+
   const startNewChat = () => {
+    setDraftChatOpen(true);
     onThreadSelected(null);
     onRunSelected(null);
     onRunUpdated(null);
     onActivePaperSelected?.(null);
     onError(null);
+    setMobilePane('detail');
+  };
+
+  const selectThread = (threadId: number | null) => {
+    setDraftChatOpen(false);
+    onThreadSelected(threadId);
+    setMobilePane(threadId == null ? 'list' : 'detail');
   };
 
   const archiveThread = useCallback(
@@ -77,15 +93,21 @@ export function ChatPage({
       }
       await api.archiveThread(threadId);
       if (selectedThreadId === threadId) {
-        startNewChat();
+        setDraftChatOpen(false);
+        onThreadSelected(null);
+        onRunSelected(null);
+        onRunUpdated(null);
+        onActivePaperSelected?.(null);
+        onError(null);
+        setMobilePane('list');
       }
       onRefresh();
     },
-    [onRefresh, selectedThreadId],
+    [onActivePaperSelected, onError, onRefresh, onRunSelected, onRunUpdated, onThreadSelected, selectedThreadId],
   );
 
   return (
-    <div className="chat-page">
+    <div className={`chat-page mobile-pane-${mobilePane}`}>
       <aside className="chat-sidebar" style={{ width: sidebarWidth }}>
         <div className="chat-sidebar__header">
           <div>
@@ -99,7 +121,7 @@ export function ChatPage({
         <ThreadList
           selectedThreadId={selectedThreadId}
           refreshToken={refreshToken}
-          onSelectThread={onThreadSelected}
+          onSelectThread={selectThread}
           onArchiveThread={archiveThread}
           variant="sidebar"
         />
@@ -115,6 +137,16 @@ export function ChatPage({
         }}
       />
       <div className="chat-workspace">
+        <button
+          className="mobile-back-button"
+          type="button"
+          onClick={() => {
+            setDraftChatOpen(false);
+            setMobilePane('list');
+          }}
+        >
+          Back to threads
+        </button>
         <ErrorBanner message={globalError} />
         <AgentPanel
           selectedThreadId={selectedThreadId}

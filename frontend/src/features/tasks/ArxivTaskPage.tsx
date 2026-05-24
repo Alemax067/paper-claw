@@ -347,7 +347,7 @@ function CategorySelector({ categories, tree, selectedCatIds, selectedTitle, emp
 
       <div className="task-category-accordion">
         {tree.map((area) => (
-          <details key={area.key} className="task-category-area" defaultOpen={area.selectedCount > 0}>
+          <Details key={area.key} className="task-category-area" defaultOpen={area.selectedCount > 0}>
             <summary>
               <span>{area.label}</span>
               <span>{area.selectedCount}/{area.totalCount} selected</span>
@@ -355,20 +355,24 @@ function CategorySelector({ categories, tree, selectedCatIds, selectedTitle, emp
             <div className="task-category-area__body">
               {area.directCategories.length > 0 && <CategoryLeafGrid categories={area.directCategories} selectedCatIds={selectedCatIds} onToggle={onToggle} />}
               {area.groups.map((group) => (
-                <details key={group.key} className="task-category-subgroup" defaultOpen={group.selectedCount > 0}>
+                <Details key={group.key} className="task-category-subgroup" defaultOpen={group.selectedCount > 0}>
                   <summary>
                     <span>{group.label}</span>
                     <span>{group.selectedCount}/{group.categories.length}</span>
                   </summary>
                   <CategoryLeafGrid categories={group.categories} selectedCatIds={selectedCatIds} onToggle={onToggle} />
-                </details>
+                </Details>
               ))}
             </div>
-          </details>
+          </Details>
         ))}
       </div>
     </div>
   );
+}
+
+function Details({ className, defaultOpen, children }: { className: string; defaultOpen: boolean; children: React.ReactNode }) {
+  return defaultOpen ? <details className={className} open>{children}</details> : <details className={className}>{children}</details>;
 }
 
 function CategoryLeafGrid({ categories, selectedCatIds, onToggle }: { categories: ArxivTaskCategoryRead[]; selectedCatIds: string[]; onToggle: (catId: string) => void }) {
