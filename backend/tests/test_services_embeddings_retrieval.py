@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import numpy as np
+
 from backend.db.models import Paper
 from backend.db.repositories import ParsingRepository
 from backend.db.types import ProcessedDocumentStatus, SectionRole
@@ -76,6 +78,19 @@ def test_vector_retrieval_ranks_expected_chunk(session):
     service.embed_missing_chunks(paper.id)
 
     results = RetrievalService(session, service).retrieve(paper.id, "retrieval evidence", limit=2)
+
+    assert results[0].metadata["chunk_key"] == "alpha"
+    assert results[0].retrieval_mode == "vector"
+
+
+def test_vector_retrieval_accepts_numpy_embeddings(session):
+    paper, chunks = create_processed_chunks(session)
+    chunks[0].embedding = np.array([1.0, 0.0, 0.0])
+    chunks[0].embedding_model = "manual"
+    chunks[0].embedding_dimension = 3
+    service = embedding_service(session)
+
+    results = RetrievalService(session, service).retrieve(paper.id, "retrieval evidence", limit=1)
 
     assert results[0].metadata["chunk_key"] == "alpha"
     assert results[0].retrieval_mode == "vector"

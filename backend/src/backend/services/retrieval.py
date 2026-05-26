@@ -32,7 +32,7 @@ class RetrievalService:
                         chunk_id=chunk.id,
                         processed_document_id=chunk.processed_document_id,
                         content_text=chunk.content_text,
-                        score=_cosine_similarity(query_vector, list(chunk.embedding or [])),
+                        score=_cosine_similarity(query_vector, list(chunk.embedding)),
                         retrieval_mode="vector",
                         metadata={"chunk_key": chunk.chunk_key, "heading_path": chunk.heading_path_json},
                     )
