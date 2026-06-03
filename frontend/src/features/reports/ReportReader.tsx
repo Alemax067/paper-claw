@@ -7,6 +7,7 @@ import { ErrorBanner } from '../../components/ErrorBanner';
 import { LoadingBlock } from '../../components/LoadingBlock';
 import { StatusBadge } from '../../components/StatusBadge';
 import { useAsyncResource } from '../../hooks/useAsyncResource';
+import { downloadMarkdown } from '../../utils/markdownExport';
 import type { JsonObject, JsonValue } from '../../api/types';
 
 interface ReportReaderProps {
@@ -89,6 +90,14 @@ export function ReportReader({ reportId, onSelectPaper, onDeleteReport }: Report
               {report.paper_id && (
                 <button className="secondary-button" type="button" onClick={() => onSelectPaper(report.paper_id!)}>Open linked paper</button>
               )}
+              <button
+                className="secondary-button"
+                disabled={!report.markdown_content}
+                onClick={() => downloadMarkdown(report.paper_title ?? report.title, report.markdown_content ?? '', { report: true })}
+                type="button"
+              >
+                Export report markdown
+              </button>
               <button className="ghost-danger-button" type="button" onClick={() => void onDeleteReport(report.id)}>
                 Delete report
               </button>

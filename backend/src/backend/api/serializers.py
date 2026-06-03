@@ -345,6 +345,7 @@ def report_read(report: Report) -> ReportRead:
     summary = report_summary(report)
     return ReportRead(
         **summary.model_dump(),
+        paper_title=report.paper.title if report.paper is not None else None,
         markdown_content=report.markdown_content,
         json_content=report.json_content,
         source_refs=list(report.source_refs_json or []),

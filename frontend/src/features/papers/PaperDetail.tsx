@@ -5,22 +5,21 @@ import { ErrorBanner } from '../../components/ErrorBanner';
 import { LoadingBlock } from '../../components/LoadingBlock';
 import { StatusBadge } from '../../components/StatusBadge';
 import { useAsyncResource } from '../../hooks/useAsyncResource';
+import { downloadMarkdown } from '../../utils/markdownExport';
 import { MarkdownMessage } from '../agent/MarkdownMessage';
 import { ArtifactUpload } from './ArtifactUpload';
 
 interface PaperDetailProps {
   paperId: number | null;
   activeRunId: number | null;
-  activePaperId: number | null;
   refreshToken: number;
-  onSetActivePaper: (paperId: number) => void;
   onSelectReport: (reportId: number) => void;
   onRefresh: () => void;
 }
 
 type DossierRecord = Record<string, unknown>;
 
-export function PaperDetail({ paperId, activeRunId, activePaperId, refreshToken, onSetActivePaper, onSelectReport, onRefresh }: PaperDetailProps) {
+export function PaperDetail({ paperId, activeRunId, refreshToken, onSelectReport, onRefresh }: PaperDetailProps) {
   const loader = useCallback(async () => {
     if (paperId == null) {
       return null;
@@ -69,11 +68,17 @@ export function PaperDetail({ paperId, activeRunId, activePaperId, refreshToken,
                 <StatusBadge status={paper.status} />
                 {paper.year && <span>{paper.year}</span>}
                 {paper.venue && <span>{paper.venue}</span>}
-                {paper.id === activePaperId && <span>active context</span>}
               </div>
               {paper.abstract && <p>{paper.abstract}</p>}
               <div className="button-row">
-                <button className="secondary-button" onClick={() => onSetActivePaper(paper.id)}>Use as active context</button>
+                <button
+                  className="secondary-button"
+                  disabled={!latestReadyDocument}
+                  onClick={() => downloadMarkdown(paper.title, String(latestReadyDocument?.content_markdown ?? ''))}
+                  type="button"
+                >
+                  Export parsed markdown
+                </button>
               </div>
             </div>
 

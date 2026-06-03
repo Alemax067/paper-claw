@@ -305,6 +305,7 @@ class ReportSummary(BaseModel):
 
 
 class ReportRead(ReportSummary):
+    paper_title: str | None = None
     markdown_content: str | None = None
     json_content: dict[str, Any] | None = None
     source_refs: list[Any] = Field(default_factory=list)

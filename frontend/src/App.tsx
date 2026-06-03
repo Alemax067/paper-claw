@@ -158,9 +158,7 @@ export function App() {
               key={selectedPaperId ?? 'empty-paper'}
               paperId={selectedPaperId}
               activeRunId={activeRunId}
-              activePaperId={activePaperId}
               refreshToken={refreshToken}
-              onSetActivePaper={setActivePaperId}
               onSelectReport={(reportId) => {
                 setSelectedReportId(reportId);
                 setActivePage('report');

@@ -153,7 +153,7 @@ def list_reports(session: Session = Depends(get_db_session)) -> list[ReportSumma
 
 @router.get("/reports/{report_id}", response_model=ReportRead)
 def get_report(report_id: int, session: Session = Depends(get_db_session)) -> ReportRead:
-    report = session.scalar(select(Report).where(Report.id == report_id).options(selectinload(Report.evidence)))
+    report = session.scalar(select(Report).where(Report.id == report_id).options(selectinload(Report.evidence), selectinload(Report.paper)))
     if report is None:
         raise HTTPException(status_code=404, detail="Report not found")
     return report_read(report)

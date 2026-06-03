@@ -210,6 +210,7 @@ export interface ReportSummary {
 }
 
 export interface ReportRead extends ReportSummary {
+  paper_title: string | null;
   markdown_content: string | null;
   json_content: JsonObject | null;
   source_refs: unknown[];

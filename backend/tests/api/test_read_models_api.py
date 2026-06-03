@@ -163,4 +163,5 @@ def test_report_detail_includes_evidence(client, session):
     response = client.get(f"/api/reports/{report.id}")
 
     assert response.status_code == 200
+    assert response.json()["paper_title"] == "Evidence paper"
     assert response.json()["evidence"][0]["quote_text"] == "quote"
