@@ -46,6 +46,21 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function requestJsonWithTimeout<T>(path: string, init: RequestInit | undefined, timeoutMs: number, timeoutMessage: string): Promise<T> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await requestJson<T>(path, { ...init, signal: controller.signal });
+  } catch (caught) {
+    if (caught instanceof Error && caught.name === 'AbortError') {
+      throw new Error(timeoutMessage);
+    }
+    throw caught;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
 async function streamNdjson<T>(response: Response, onEvent: (event: T) => void): Promise<T | null> {
   if (!response.body) {
     return null;
@@ -169,10 +184,10 @@ export const api = {
     }),
   listArxivTaskSubscriptions: () => requestJson<ArxivTaskSubscriptionRead[]>('/api/tasks/arxiv/subscriptions', { cache: 'no-store' }),
   testArxivTaskSubscriptionQuery: (request: ArxivTaskSubscriptionTestRequest) =>
-    requestJson<ArxivTaskSubscriptionTestRead>('/api/tasks/arxiv/subscriptions/test-query', {
+    requestJsonWithTimeout<ArxivTaskSubscriptionTestRead>('/api/tasks/arxiv/subscriptions/test-query', {
       method: 'POST',
       body: JSON.stringify(request),
-    }),
+    }, 55000, 'arXiv query test timed out. Refine the query and try again.'),
   createArxivTaskSubscription: (request: ArxivTaskSubscriptionCreateRequest) =>
     requestJson<ArxivTaskSubscriptionRead>('/api/tasks/arxiv/subscriptions', {
       method: 'POST',

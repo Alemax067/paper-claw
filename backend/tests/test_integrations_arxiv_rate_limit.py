@@ -3,9 +3,11 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from backend.integrations.paper_sources.arxiv import ArxivClient, ArxivRateLimiter
+from backend.integrations.paper_sources import factory
 
 
 class FakeClock:
@@ -71,6 +73,16 @@ def test_arxiv_search_and_download_share_limiter(tmp_path):
     assert "/e-print/" not in requested_urls[-1]
 
 
+def test_arxiv_factory_reuses_shared_limiter():
+    factory.clear_paper_source_adapters_cache()
+    try:
+        adapters = factory.paper_source_adapters_from_settings()
+
+        assert adapters["arxiv"].limiter is factory.arxiv_rate_limiter_from_settings()
+    finally:
+        factory.clear_paper_source_adapters_cache()
+
+
 def test_arxiv_retry_uses_exponential_backoff():
     clock = FakeClock()
     limiter = ArxivRateLimiter(min_interval_seconds=1.0, monotonic=clock.monotonic, sleep=clock.sleep)
@@ -95,6 +107,24 @@ def test_arxiv_retry_reraises_last_error():
 
     with pytest.raises(RuntimeError, match="boom"):
         client._with_retry(lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+
+
+def test_arxiv_retry_does_not_retry_rate_limit():
+    calls = {"count": 0}
+    sleeps: list[float] = []
+    request = httpx.Request("GET", "https://export.arxiv.org/api/query")
+    response = httpx.Response(429, request=request)
+    client = ArxivClient(limiter=ArxivRateLimiter(min_interval_seconds=0), max_retries=3, sleep=sleeps.append)
+
+    def operation():
+        calls["count"] += 1
+        raise httpx.HTTPStatusError("rate exceeded", request=request, response=response)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        client._with_retry(operation)
+
+    assert calls["count"] == 1
+    assert sleeps == []
 
 
 def test_arxiv_id_mode_uses_exact_id_lookup():

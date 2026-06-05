@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+from backend.api.routers import tasks
 from backend.db.models import ArxivTaskSubscription
 from backend.db.types import ArxivTaskJobStatus
 
@@ -34,6 +35,44 @@ def test_arxiv_task_subscription_create_preserves_query_source(client, session):
     assert response.status_code == 200
     payload = response.json()
     assert payload["query"] == "  cat:cs.AI AND (ti:agent OR abs:agent)  "
+
+
+def test_arxiv_task_subscription_test_query_reports_timeout(client, monkeypatch):
+    class FailingService:
+        def __init__(self, session):
+            pass
+
+        def test_query(self, query: str, *, max_results: int = 5):
+            import httpx
+
+            raise httpx.ReadTimeout("read operation timed out")
+
+    monkeypatch.setattr(tasks, "ArxivTaskService", FailingService)
+
+    response = client.post("/api/tasks/arxiv/subscriptions/test-query", json={"query": "cat:cs.AI", "max_results": 3})
+
+    assert response.status_code == 504
+    assert response.json()["detail"] == "arXiv query test timed out after 45 seconds. Refine the query and try again."
+
+
+def test_arxiv_task_subscription_test_query_reports_rate_limit(client, monkeypatch):
+    class FailingService:
+        def __init__(self, session):
+            pass
+
+        def test_query(self, query: str, *, max_results: int = 5):
+            import httpx
+
+            request = httpx.Request("GET", "https://export.arxiv.org/api/query")
+            response = httpx.Response(429, request=request)
+            raise httpx.HTTPStatusError("too many requests", request=request, response=response)
+
+    monkeypatch.setattr(tasks, "ArxivTaskService", FailingService)
+
+    response = client.post("/api/tasks/arxiv/subscriptions/test-query", json={"query": "cat:cs.AI", "max_results": 3})
+
+    assert response.status_code == 429
+    assert response.json()["detail"] == "arXiv rate limit reached. Wait a few seconds and try again."
 
 
 def test_arxiv_history_job_validates_unknown_subscription_id(client, session):

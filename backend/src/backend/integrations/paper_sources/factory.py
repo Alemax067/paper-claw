@@ -11,15 +11,21 @@ from backend.settings import Settings, get_settings
 @lru_cache(maxsize=1)
 def paper_source_adapters_from_settings() -> dict[str, PaperSourceAdapter]:
     settings = get_settings()
-    return _paper_source_adapters(settings)
+    return _paper_source_adapters(settings, arxiv_rate_limiter_from_settings())
+
+
+@lru_cache(maxsize=1)
+def arxiv_rate_limiter_from_settings() -> ArxivRateLimiter:
+    settings = get_settings()
+    return ArxivRateLimiter(min_interval_seconds=settings.arxiv_min_interval_seconds)
 
 
 def clear_paper_source_adapters_cache() -> None:
     paper_source_adapters_from_settings.cache_clear()
+    arxiv_rate_limiter_from_settings.cache_clear()
 
 
-def _paper_source_adapters(settings: Settings) -> dict[str, PaperSourceAdapter]:
-    arxiv_limiter = ArxivRateLimiter(min_interval_seconds=settings.arxiv_min_interval_seconds)
+def _paper_source_adapters(settings: Settings, arxiv_limiter: ArxivRateLimiter) -> dict[str, PaperSourceAdapter]:
     return {
         "arxiv": ArxivClient(
             limiter=arxiv_limiter,

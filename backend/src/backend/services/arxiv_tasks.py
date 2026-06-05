@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from functools import lru_cache
 from typing import Protocol
 
 from sqlalchemy.orm import Session
@@ -10,12 +11,13 @@ from backend.db.models import ArxivTaskHarvestJob, ArxivTaskSubscription
 from backend.db.repositories import ArxivTaskRepository
 from backend.db.types import ArxivTaskJobKind, ArxivTaskJobStatus, ArxivTaskWindowStatus
 from backend.integrations.paper_sources.arxiv import ArxivClient, ArxivMetadataEntry, ArxivMetadataQueryResponse
-from backend.integrations.paper_sources.factory import paper_source_adapters_from_settings
+from backend.integrations.paper_sources.factory import arxiv_rate_limiter_from_settings, paper_source_adapters_from_settings
 
 PAGE_SIZE = 100
 MAX_RESULTS_BEFORE_SPLIT = 1000
 MIN_SPLIT_WINDOW = timedelta(hours=1)
 MAX_WINDOW = timedelta(days=1)
+PREVIEW_TIMEOUT_SECONDS = 45.0
 
 
 class ArxivMetadataClient(Protocol):
@@ -80,7 +82,8 @@ class ArxivTaskService:
             raise ValueError("arXiv task subscription not found")
 
     def test_query(self, query: str, *, max_results: int = 5) -> ArxivMetadataQueryResponse:
-        return self.arxiv_client.query_metadata(_validate_query(query), page_size=max_results)
+        client = self._arxiv_client or _arxiv_preview_client()
+        return client.query_metadata(_validate_query(query), page_size=max_results)
 
     def enqueue_daily_run(self) -> ArxivTaskHarvestJob:
         subscriptions = self.repository.enabled_subscriptions()
@@ -340,6 +343,17 @@ class ArxivTaskService:
 
 def _arxiv_client_from_settings() -> ArxivClient:
     return paper_source_adapters_from_settings()["arxiv"]  # type: ignore[return-value]
+
+
+@lru_cache(maxsize=1)
+def _arxiv_preview_client() -> ArxivClient:
+    return ArxivClient(
+        limiter=arxiv_rate_limiter_from_settings(),
+        max_retries=1,
+        backoff_base_seconds=5.0,
+        backoff_max_seconds=5.0,
+        timeout_seconds=PREVIEW_TIMEOUT_SECONDS,
+    )
 
 
 def _now() -> datetime:

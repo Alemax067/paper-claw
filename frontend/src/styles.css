@@ -1559,15 +1559,19 @@ button:focus-visible {
   text-transform: uppercase;
 }
 
-.task-grid {
+.task-top-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.25fr) minmax(22rem, 0.75fr);
+  grid-template-columns: minmax(0, 1fr) minmax(24rem, 0.82fr);
   gap: 1rem;
   align-items: start;
 }
 
-.task-panel--wide {
-  grid-column: 1 / span 1;
+.task-main-grid {
+  display: grid;
+  grid-template-columns: minmax(18rem, 0.34fr) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+  margin-top: 1rem;
 }
 
 .task-panel-header-row,
@@ -1582,11 +1586,9 @@ button:focus-visible {
   width: min(14rem, 100%);
 }
 
-.task-subscription-layout {
-  display: grid;
-  grid-template-columns: minmax(18rem, 0.9fr) minmax(18rem, 1.1fr);
-  gap: 1rem;
-  align-items: start;
+.task-subscription-list-panel,
+.task-detail-panel {
+  min-width: 0;
 }
 
 .task-subscription-form,
@@ -1601,6 +1603,36 @@ button:focus-visible {
   resize: vertical;
 }
 
+.task-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.62);
+  padding: 1.25rem;
+}
+
+.task-modal {
+  display: grid;
+  width: min(62rem, 96vw);
+  max-height: min(46rem, 92vh);
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: rgba(29, 31, 25, 0.98);
+  box-shadow: 0 2rem 6rem rgba(0, 0, 0, 0.46);
+}
+
+.task-modal-body {
+  display: grid;
+  grid-template-columns: minmax(18rem, 0.95fr) minmax(18rem, 1.05fr);
+  gap: 1rem;
+  min-height: 0;
+  overflow: auto;
+  padding: 1rem;
+}
+
 .task-query-preview {
   min-width: 0;
   border: 1px solid var(--line);
@@ -1611,7 +1643,7 @@ button:focus-visible {
 
 .task-preview-list,
 .task-subscription-list {
-  max-height: min(32rem, 64vh);
+  max-height: min(42rem, 70vh);
   overflow: auto;
   padding-right: 0.25rem;
 }
@@ -1622,13 +1654,13 @@ button:focus-visible {
 }
 
 .task-subscription-list {
-  grid-column: 1 / -1;
   display: grid;
-  gap: 0.65rem;
+  gap: 0.55rem;
 }
 
 .task-subscription-card,
 .task-preview-card,
+.task-detail-card,
 .task-subscription-chip {
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
@@ -1639,9 +1671,10 @@ button:focus-visible {
 
 .task-subscription-card {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 0.85rem;
-  padding: 0.85rem;
+  width: 100%;
+  gap: 0.42rem;
+  padding: 0.75rem;
+  text-align: left;
 }
 
 .task-subscription-card.is-selected,
@@ -1654,12 +1687,13 @@ button:focus-visible {
 .task-subscription-card:hover,
 .task-subscription-chip:hover,
 .task-preview-card:hover,
+.task-detail-card:hover,
 .task-job-card:hover,
 .task-paper-card:hover {
   transform: translateY(-1px);
 }
 
-.task-subscription-card h3,
+.task-subscription-card strong,
 .task-preview-card h4 {
   margin: 0.35rem 0;
   color: var(--ink);
@@ -1667,6 +1701,7 @@ button:focus-visible {
 }
 
 .task-subscription-card p,
+.task-subscription-card__description,
 .task-preview-card p,
 .task-query-line {
   overflow-wrap: anywhere;
@@ -1675,6 +1710,7 @@ button:focus-visible {
 }
 
 .task-subscription-card p,
+.task-subscription-card__description,
 .task-query-line {
   margin: 0.35rem 0;
 }
@@ -1687,7 +1723,8 @@ button:focus-visible {
   -webkit-line-clamp: 3;
 }
 
-.task-subscription-card pre {
+.task-subscription-card code,
+.task-detail-card pre {
   max-height: 7.5rem;
   overflow: auto;
   margin: 0.45rem 0 0;
@@ -1700,6 +1737,54 @@ button:focus-visible {
   overflow-wrap: anywhere;
   font-family: var(--font-mono);
   font-size: 0.72rem;
+}
+
+.task-subscription-card code {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.task-detail-card {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.85rem;
+}
+
+.task-detail-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.task-detail-card p {
+  margin: 0;
+  color: var(--ink-muted);
+  line-height: 1.5;
+}
+
+.task-detail-card pre {
+  max-height: 14rem;
+}
+
+.task-detail-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1rem;
+}
+
+.task-history-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(11rem, 0.32fr) minmax(11rem, 0.32fr) auto;
+  gap: 0.75rem;
+  align-items: end;
+}
+
+.task-compact-timeline {
+  max-height: 9rem;
+  overflow: auto;
 }
 
 .task-preview-card {
@@ -1866,7 +1951,11 @@ button:focus-visible {
     max-width: 100%;
   }
 
-  .task-grid,
+  .task-top-grid,
+  .task-main-grid,
+  .task-detail-columns,
+  .task-history-form,
+  .task-modal-body,
   .task-hero {
     grid-template-columns: 1fr;
   }
@@ -1968,7 +2057,7 @@ button:focus-visible {
   .chat-page,
   .split-page,
   .memory-grid,
-  .task-grid {
+  .task-main-grid {
     grid-template-columns: minmax(0, 1fr);
     height: 100%;
   }
@@ -2179,7 +2268,11 @@ button:focus-visible {
     min-width: 0;
   }
 
-  .task-grid {
+  .task-top-grid,
+  .task-main-grid,
+  .task-detail-columns,
+  .task-history-form,
+  .task-modal-body {
     grid-template-columns: 1fr;
   }
 
@@ -2188,8 +2281,17 @@ button:focus-visible {
     flex-direction: column;
   }
 
-  .task-subscription-layout,
   .task-subscription-card {
     grid-template-columns: 1fr;
+  }
+
+  .task-modal-backdrop {
+    align-items: stretch;
+    padding: 0.6rem;
+  }
+
+  .task-modal {
+    width: 100%;
+    max-height: 96vh;
   }
 }

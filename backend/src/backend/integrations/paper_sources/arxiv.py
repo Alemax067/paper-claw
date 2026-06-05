@@ -178,6 +178,8 @@ class ArxivClient:
                 return operation()
             except Exception as exc:
                 last_error = exc
+                if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429:
+                    break
                 if attempt >= self.max_retries:
                     break
                 self.sleep(min(self.backoff_max_seconds, self.backoff_base_seconds * (2**attempt)))

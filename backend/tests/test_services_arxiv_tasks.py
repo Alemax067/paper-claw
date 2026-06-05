@@ -134,6 +134,37 @@ def test_subscription_query_is_preserved_verbatim(session):
     assert subscription.query == "  cat:cs.AI AND ti:agent  "
 
 
+def test_query_preview_uses_fast_dedicated_arxiv_client(session, monkeypatch):
+    from backend.services import arxiv_tasks
+
+    arxiv_tasks._arxiv_preview_client.cache_clear()
+    created: dict[str, object] = {}
+
+    class RecordingClient:
+        def __init__(self, *, limiter, max_retries: int, backoff_base_seconds: float, backoff_max_seconds: float, timeout_seconds: float) -> None:
+            created["limiter"] = limiter
+            created["max_retries"] = max_retries
+            created["backoff_base_seconds"] = backoff_base_seconds
+            created["backoff_max_seconds"] = backoff_max_seconds
+            created["timeout_seconds"] = timeout_seconds
+
+        def query_metadata(self, search_query: str, *, page_size: int = 5, offset: int = 0):
+            return ArxivMetadataQueryResponse(query_used=search_query, total_results=0, start=offset, page_size=page_size, entries=[])
+
+    monkeypatch.setattr("backend.services.arxiv_tasks.paper_source_adapters_from_settings", lambda: (_ for _ in ()).throw(AssertionError("default harvester client should not be used for preview")))
+    monkeypatch.setattr("backend.services.arxiv_tasks.arxiv_rate_limiter_from_settings", lambda: "shared-limiter")
+    monkeypatch.setattr("backend.services.arxiv_tasks.ArxivClient", RecordingClient)
+
+    response = ArxivTaskService(session).test_query("cat:cs.AI")
+
+    assert response.total_results == 0
+    assert created["limiter"] == "shared-limiter"
+    assert created["max_retries"] == 1
+    assert created["backoff_base_seconds"] == 5.0
+    assert created["backoff_max_seconds"] == 5.0
+    assert created["timeout_seconds"] == 45.0
+
+
 def create_subscription(session, *, enabled: bool = True) -> ArxivTaskSubscription:
     subscription = ArxivTaskSubscription(name="Machine learning", query="cat:cs.LG", enabled=enabled)
     session.add(subscription)

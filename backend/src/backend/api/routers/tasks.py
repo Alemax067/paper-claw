@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+import httpx
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -75,6 +76,14 @@ def test_arxiv_task_subscription_query(request: ArxivTaskSubscriptionTestRequest
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except httpx.TimeoutException as exc:
+        raise HTTPException(status_code=504, detail="arXiv query test timed out after 45 seconds. Refine the query and try again.") from exc
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 429:
+            raise HTTPException(status_code=429, detail="arXiv rate limit reached. Wait a few seconds and try again.") from exc
+        raise HTTPException(status_code=502, detail=str(exc) or type(exc).__name__) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc) or type(exc).__name__) from exc
 
 
 @router.post("/tasks/arxiv/subscriptions", response_model=ArxivTaskSubscriptionRead)
