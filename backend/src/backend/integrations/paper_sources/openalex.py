@@ -32,7 +32,7 @@ class OpenAlexClient:
         self.backoff_base_seconds = backoff_base_seconds
         self.backoff_max_seconds = backoff_max_seconds
         self.sleep = sleep
-        self.client = http_client or httpx.Client(base_url="https://api.openalex.org", headers=headers, timeout=timeout_seconds)
+        self.client = http_client or httpx.Client(base_url="https://api.openalex.org", headers=headers, timeout=timeout_seconds, trust_env=False)
 
     def search(self, query: str, max_results: int = 10, *, mode: str = "auto", offset: int = 0) -> PaperSourceSearchResponse:
         max_results = max(1, min(max_results, 50))

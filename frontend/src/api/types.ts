@@ -239,25 +239,53 @@ export interface ArxivTaskDailyConfigUpdateRequest {
   run_time: string;
 }
 
-export interface ArxivTaskCategoryRead {
+export interface ArxivTaskSubscriptionRead {
   id: number;
-  cat_id: string;
-  top_area: string;
-  group: string | null;
-  group_code: string | null;
-  archive: string;
   name: string;
+  query: string;
   description: string | null;
-  is_alias: boolean;
-  alias_of: string | null;
-  api_exact_query: string;
   enabled: boolean;
+  last_refreshed_at: string | null;
   created_at: string;
   updated_at: string;
 }
 
-export interface ArxivTaskCategoryUpdateRequest {
-  enabled_cat_ids: string[];
+export interface ArxivTaskSubscriptionCreateRequest {
+  name: string;
+  query: string;
+  description?: string | null;
+  enabled: boolean;
+}
+
+export interface ArxivTaskSubscriptionUpdateRequest {
+  name: string;
+  query: string;
+  description?: string | null;
+  enabled: boolean;
+}
+
+export interface ArxivTaskSubscriptionTestRequest {
+  query: string;
+  max_results?: number;
+}
+
+export interface ArxivTaskSubscriptionTestPaperRead {
+  arxiv_id: string;
+  title: string;
+  abstract: string | null;
+  authors: string[];
+  primary_category: string | null;
+  categories: string[];
+  published_at: string | null;
+  updated_at_source: string | null;
+  landing_page_url: string | null;
+  pdf_url: string | null;
+}
+
+export interface ArxivTaskSubscriptionTestRead {
+  query: string;
+  total_results: number;
+  papers: ArxivTaskSubscriptionTestPaperRead[];
 }
 
 export interface ArxivTaskPaperRead {
@@ -282,7 +310,8 @@ export interface ArxivTaskPaperRead {
 
 export interface ArxivTaskQueryWindowRead {
   id: number;
-  cat_id: string;
+  subscription_id: number;
+  query_snapshot: string;
   job_id: number | null;
   kind: string;
   window_start: string;
@@ -307,7 +336,7 @@ export interface ArxivTaskHarvestJobRead {
   id: number;
   kind: string;
   status: string;
-  cat_ids: string[];
+  subscription_ids: number[];
   requested_start: string | null;
   requested_end: string | null;
   started_at: string | null;
@@ -319,16 +348,16 @@ export interface ArxivTaskHarvestJobRead {
 }
 
 export interface ArxivTaskHistoryJobCreateRequest {
-  cat_ids: string[];
+  subscription_ids: number[];
   start_time: string;
   end_time: string;
 }
 
 export interface ArxivTaskStatusRead {
   daily_config: ArxivTaskDailyConfigRead;
-  categories: ArxivTaskCategoryRead[];
-  enabled_cat_ids: string[];
-  coverage_cat_ids: string[];
+  subscriptions: ArxivTaskSubscriptionRead[];
+  enabled_subscription_ids: number[];
+  coverage_subscription_ids: number[];
   active_job: ArxivTaskHarvestJobRead | null;
   recent_jobs: ArxivTaskHarvestJobRead[];
   recent_windows: ArxivTaskQueryWindowRead[];

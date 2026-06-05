@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import text
 
-from backend.db.models import ArxivTaskCategory
+from backend.db.models import ArxivTaskSubscription
 from backend.db.types import ArxivTaskJobKind, ArxivTaskJobStatus, ArxivTaskWindowStatus
 from backend.integrations.paper_sources.arxiv import ArxivMetadataEntry, ArxivMetadataQueryResponse
 from backend.services.arxiv_tasks import ArxivTaskService
@@ -15,25 +15,33 @@ from backend.services.arxiv_tasks import ArxivTaskService
 @dataclass
 class FakeMetadataClient:
     total_results: int = 1
-    calls: list[tuple[str, datetime, datetime, int, int]] | None = None
+    calls: list[tuple[str, datetime | None, datetime | None, int, int]] | None = None
     on_call: Callable[[], None] | None = None
 
-    def query_metadata_window(self, cat_id: str, start_time: datetime, end_time: datetime, *, page_size: int = 100, offset: int = 0):
+    def query_metadata(self, search_query: str, *, page_size: int = 5, offset: int = 0):
+        return self._response(search_query, None, None, page_size, offset)
+
+    def query_metadata_window(self, search_query: str, start_time: datetime, end_time: datetime, *, page_size: int = 100, offset: int = 0):
+        return self._response(search_query, start_time, end_time, page_size, offset)
+
+    def _response(self, search_query: str, start_time: datetime | None, end_time: datetime | None, page_size: int, offset: int):
         if self.calls is None:
             self.calls = []
-        self.calls.append((cat_id, start_time, end_time, page_size, offset))
+        self.calls.append((search_query, start_time, end_time, page_size, offset))
         if self.on_call is not None:
             self.on_call()
+        published_at = (start_time or datetime(2024, 1, 1, tzinfo=UTC)) + timedelta(minutes=5)
+        updated_at = end_time or datetime(2024, 1, 2, tzinfo=UTC)
         entry = ArxivMetadataEntry(
             arxiv_id="2401.00001v1",
             arxiv_base_id="2401.00001",
             title="A harvested paper",
             abstract="abstract",
             authors=["Ada Lovelace"],
-            primary_category=cat_id,
-            categories=[cat_id, "cs.AI"],
-            published_at=start_time + timedelta(minutes=5),
-            updated_at=end_time,
+            primary_category="cs.LG",
+            categories=["cs.LG", "cs.AI"],
+            published_at=published_at,
+            updated_at=updated_at,
             landing_page_url="https://arxiv.org/abs/2401.00001v1",
             pdf_url="https://arxiv.org/pdf/2401.00001v1",
             doi=None,
@@ -42,7 +50,7 @@ class FakeMetadataClient:
             raw={"id": "2401.00001v1"},
         )
         return ArxivMetadataQueryResponse(
-            query_used="cat:cs.LG",
+            query_used=search_query,
             total_results=self.total_results,
             start=offset,
             page_size=page_size,
@@ -51,28 +59,32 @@ class FakeMetadataClient:
 
 
 def test_harvest_window_upserts_task_metadata_without_curated_papers(session):
+    subscription = create_subscription(session)
     client = FakeMetadataClient()
     service = ArxivTaskService(session, arxiv_client=client)
     start = datetime(2024, 1, 1, tzinfo=UTC)
     end = start + timedelta(hours=1)
 
-    stats = service.harvest_window("cs.LG", start, end, job_id=None, kind=ArxivTaskJobKind.history.value)
-    second_stats = service.harvest_window("cs.LG", start, end, job_id=None, kind=ArxivTaskJobKind.history.value)
+    stats = service.harvest_window(subscription, start, end, job_id=None, kind=ArxivTaskJobKind.history.value)
+    second_stats = service.harvest_window(subscription, start, end, job_id=None, kind=ArxivTaskJobKind.history.value)
     session.commit()
 
     assert stats.inserted_count == 1
     assert second_stats.updated_count == 1
     assert session.execute(text("select count(*) from arxiv_task_papers")).scalar_one() == 1
+    assert session.execute(text("select count(*) from arxiv_task_paper_subscriptions")).scalar_one() == 1
+    assert session.execute(text("select query_snapshot from arxiv_task_paper_subscriptions")).scalar_one() == "cat:cs.LG"
     assert session.execute(text("select count(*) from papers")).scalar_one() == 0
 
 
 def test_harvest_window_splits_large_result_windows(session):
+    subscription = create_subscription(session)
     client = FakeMetadataClient(total_results=1001)
     service = ArxivTaskService(session, arxiv_client=client)
     start = datetime(2024, 1, 1, tzinfo=UTC)
     end = start + timedelta(hours=2)
 
-    service.harvest_window("cs.LG", start, end, job_id=None, kind=ArxivTaskJobKind.history.value)
+    service.harvest_window(subscription, start, end, job_id=None, kind=ArxivTaskJobKind.history.value)
     session.commit()
 
     windows = session.execute(text("select status from arxiv_task_query_windows order by id")).scalars().all()
@@ -81,10 +93,9 @@ def test_harvest_window_splits_large_result_windows(session):
 
 
 def test_run_history_step_honors_stop_after_current_window(session):
-    session.add(ArxivTaskCategory(cat_id="cs.LG", top_area="Computer Science", group=None, group_code=None, archive="cs", name="Machine Learning", is_alias=False, alias_of=None, api_exact_query="cat:cs.LG", enabled=False))
-    session.commit()
+    subscription = create_subscription(session)
     service = ArxivTaskService(session, arxiv_client=FakeMetadataClient(total_results=0))
-    job = service.create_history_job(["cs.LG"], datetime(2024, 1, 1, tzinfo=UTC), datetime(2024, 1, 2, tzinfo=UTC))
+    job = service.create_history_job([subscription.id], datetime(2024, 1, 1, tzinfo=UTC), datetime(2024, 1, 2, tzinfo=UTC))
     service.start_job(job.id)
 
     def stop_during_window() -> None:
@@ -92,22 +103,39 @@ def test_run_history_step_honors_stop_after_current_window(session):
         session.commit()
 
     service.arxiv_client.on_call = stop_during_window
-    service.run_history_step(job.id)
+    service.run_job_step(job.id)
     session.commit()
 
     assert job.status == ArxivTaskJobStatus.stopped.value
 
 
-def test_daily_uses_latest_successful_coverage(session):
-    category = ArxivTaskCategory(cat_id="cs.LG", top_area="Computer Science", group=None, group_code=None, archive="cs", name="Machine Learning", is_alias=False, alias_of=None, api_exact_query="cat:cs.LG", enabled=True)
-    session.add(category)
-    session.commit()
+def test_daily_queue_uses_latest_successful_coverage(session):
+    create_subscription(session, enabled=True)
     client = FakeMetadataClient(total_results=0)
     service = ArxivTaskService(session, arxiv_client=client)
 
-    job = service.run_daily_once()
+    job = service.enqueue_daily_run()
+    service.run_next_queue_step()
+    service.run_next_queue_step()
     session.commit()
 
     assert job.status == ArxivTaskJobStatus.succeeded.value
     assert client.calls is not None
-    assert all(end - start <= timedelta(days=1) for _, start, end, _, _ in client.calls)
+    window_calls = [(start, end) for _, start, end, _, _ in client.calls if start is not None and end is not None]
+    assert window_calls
+    assert all(end - start <= timedelta(days=1) for start, end in window_calls)
+
+
+def test_subscription_query_is_preserved_verbatim(session):
+    service = ArxivTaskService(session, arxiv_client=FakeMetadataClient())
+    subscription = service.create_subscription(name="Verbatim", query="  cat:cs.AI AND ti:agent  ", enabled=True)
+    session.commit()
+
+    assert subscription.query == "  cat:cs.AI AND ti:agent  "
+
+
+def create_subscription(session, *, enabled: bool = True) -> ArxivTaskSubscription:
+    subscription = ArxivTaskSubscription(name="Machine learning", query="cat:cs.LG", enabled=enabled)
+    session.add(subscription)
+    session.commit()
+    return subscription

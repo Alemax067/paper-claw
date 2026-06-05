@@ -24,21 +24,18 @@ class ArxivTaskDailyConfig(TimestampMixin, Base):
     metadata_json: Mapped[JsonDict] = mapped_column(JsonObject, default=dict, nullable=False)
 
 
-class ArxivTaskCategory(TimestampMixin, Base):
-    __tablename__ = "arxiv_task_categories"
+class ArxivTaskSubscription(TimestampMixin, Base):
+    __tablename__ = "arxiv_task_subscriptions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    cat_id: Mapped[str] = mapped_column(String(40), nullable=False, unique=True, index=True)
-    top_area: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
-    group: Mapped[str | None] = mapped_column(String(120), index=True)
-    group_code: Mapped[str | None] = mapped_column(String(40), index=True)
-    archive: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    query: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
-    is_alias: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
-    alias_of: Mapped[str | None] = mapped_column(String(40), index=True)
-    api_exact_query: Mapped[str] = mapped_column(String(120), nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    last_refreshed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    paper_links: Mapped[list[ArxivTaskPaperSubscription]] = relationship(back_populates="subscription", cascade="all, delete-orphan")
+    windows: Mapped[list[ArxivTaskQueryWindow]] = relationship(back_populates="subscription")
 
 
 class ArxivTaskPaper(TimestampMixin, Base):
@@ -63,20 +60,21 @@ class ArxivTaskPaper(TimestampMixin, Base):
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
-    category_links: Mapped[list[ArxivTaskPaperCategory]] = relationship(back_populates="paper", cascade="all, delete-orphan")
+    subscription_links: Mapped[list[ArxivTaskPaperSubscription]] = relationship(back_populates="paper", cascade="all, delete-orphan")
 
 
-class ArxivTaskPaperCategory(Base):
-    __tablename__ = "arxiv_task_paper_categories"
-    __table_args__ = (UniqueConstraint("paper_id", "cat_id", name="uq_arxiv_task_paper_categories_paper_cat"),)
+class ArxivTaskPaperSubscription(Base):
+    __tablename__ = "arxiv_task_paper_subscriptions"
+    __table_args__ = (UniqueConstraint("paper_id", "subscription_id", name="uq_arxiv_task_paper_subscriptions_paper_subscription"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     paper_id: Mapped[int] = mapped_column(ForeignKey("arxiv_task_papers.id", ondelete="CASCADE"), nullable=False, index=True)
-    cat_id: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
-    is_primary: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    subscription_id: Mapped[int] = mapped_column(ForeignKey("arxiv_task_subscriptions.id", ondelete="CASCADE"), nullable=False, index=True)
+    query_snapshot: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
-    paper: Mapped[ArxivTaskPaper] = relationship(back_populates="category_links")
+    paper: Mapped[ArxivTaskPaper] = relationship(back_populates="subscription_links")
+    subscription: Mapped[ArxivTaskSubscription] = relationship(back_populates="paper_links")
 
 
 class ArxivTaskHarvestJob(TimestampMixin, Base):
@@ -85,7 +83,7 @@ class ArxivTaskHarvestJob(TimestampMixin, Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     kind: Mapped[str] = mapped_column(String(40), default=ArxivTaskJobKind.history.value, nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(40), default=ArxivTaskJobStatus.paused.value, nullable=False, index=True)
-    cat_ids_json: Mapped[JsonList] = mapped_column(JsonObject, default=list, nullable=False)
+    subscription_ids_json: Mapped[JsonList] = mapped_column(JsonObject, default=list, nullable=False)
     requested_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     requested_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -100,7 +98,8 @@ class ArxivTaskQueryWindow(TimestampMixin, Base):
     __tablename__ = "arxiv_task_query_windows"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    cat_id: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    subscription_id: Mapped[int] = mapped_column(ForeignKey("arxiv_task_subscriptions.id", ondelete="CASCADE"), nullable=False, index=True)
+    query_snapshot: Mapped[str] = mapped_column(Text, nullable=False)
     job_id: Mapped[int | None] = mapped_column(ForeignKey("arxiv_task_harvest_jobs.id", ondelete="SET NULL"), index=True)
     kind: Mapped[str] = mapped_column(String(40), default=ArxivTaskJobKind.history.value, nullable=False, index=True)
     window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
@@ -119,4 +118,5 @@ class ArxivTaskQueryWindow(TimestampMixin, Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     job: Mapped[ArxivTaskHarvestJob | None] = relationship(back_populates="windows")
+    subscription: Mapped[ArxivTaskSubscription] = relationship(back_populates="windows")
     parent_window: Mapped[ArxivTaskQueryWindow | None] = relationship(remote_side=[id])

@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from backend.db.models import AgentRun, AgentRunEvent, ArxivTaskCategory, ArxivTaskDailyConfig, ArxivTaskHarvestJob, ArxivTaskPaper, ArxivTaskQueryWindow, Artifact, Memory, Message, Paper, Report, SearchCandidate, SearchSession, Thread
+from backend.db.models import AgentRun, AgentRunEvent, ArxivTaskDailyConfig, ArxivTaskHarvestJob, ArxivTaskPaper, ArxivTaskQueryWindow, ArxivTaskSubscription, Artifact, Memory, Message, Paper, Report, SearchCandidate, SearchSession, Thread
 from backend.schemas import (
-    ArxivTaskCategoryRead,
     ArxivTaskDailyConfigRead,
     ArxivTaskHarvestJobRead,
     ArxivTaskPaperRead,
     ArxivTaskQueryWindowRead,
     ArxivTaskStatusRead,
+    ArxivTaskSubscriptionRead,
     ArtifactRead,
     MemoryRead,
     MessageRead,
@@ -244,22 +244,16 @@ def arxiv_task_daily_config_read(config: ArxivTaskDailyConfig) -> ArxivTaskDaily
     )
 
 
-def arxiv_task_category_read(category: ArxivTaskCategory) -> ArxivTaskCategoryRead:
-    return ArxivTaskCategoryRead(
-        id=category.id,
-        cat_id=category.cat_id,
-        top_area=category.top_area,
-        group=category.group,
-        group_code=category.group_code,
-        archive=category.archive,
-        name=category.name,
-        description=category.description,
-        is_alias=category.is_alias,
-        alias_of=category.alias_of,
-        api_exact_query=category.api_exact_query,
-        enabled=category.enabled,
-        created_at=category.created_at,
-        updated_at=category.updated_at,
+def arxiv_task_subscription_read(subscription: ArxivTaskSubscription) -> ArxivTaskSubscriptionRead:
+    return ArxivTaskSubscriptionRead(
+        id=subscription.id,
+        name=subscription.name,
+        query=subscription.query,
+        description=subscription.description,
+        enabled=subscription.enabled,
+        last_refreshed_at=subscription.last_refreshed_at,
+        created_at=subscription.created_at,
+        updated_at=subscription.updated_at,
     )
 
 
@@ -288,7 +282,8 @@ def arxiv_task_paper_read(paper: ArxivTaskPaper) -> ArxivTaskPaperRead:
 def arxiv_task_window_read(window: ArxivTaskQueryWindow) -> ArxivTaskQueryWindowRead:
     return ArxivTaskQueryWindowRead(
         id=window.id,
-        cat_id=window.cat_id,
+        subscription_id=window.subscription_id,
+        query_snapshot=window.query_snapshot,
         job_id=window.job_id,
         kind=window.kind,
         window_start=window.window_start,
@@ -315,7 +310,7 @@ def arxiv_task_job_read(job: ArxivTaskHarvestJob) -> ArxivTaskHarvestJobRead:
         id=job.id,
         kind=job.kind,
         status=job.status,
-        cat_ids=[str(cat_id) for cat_id in job.cat_ids_json or []],
+        subscription_ids=[int(subscription_id) for subscription_id in job.subscription_ids_json or []],
         requested_start=job.requested_start,
         requested_end=job.requested_end,
         started_at=job.started_at,
@@ -327,12 +322,12 @@ def arxiv_task_job_read(job: ArxivTaskHarvestJob) -> ArxivTaskHarvestJobRead:
     )
 
 
-def arxiv_task_status_read(*, daily_config: ArxivTaskDailyConfig, categories: list[ArxivTaskCategory], coverage_cat_ids: list[str], active_job: ArxivTaskHarvestJob | None, recent_jobs: list[ArxivTaskHarvestJob], recent_windows: list[ArxivTaskQueryWindow], recent_papers: list[ArxivTaskPaper], total_papers: int) -> ArxivTaskStatusRead:
+def arxiv_task_status_read(*, daily_config: ArxivTaskDailyConfig, subscriptions: list[ArxivTaskSubscription], coverage_subscription_ids: list[int], active_job: ArxivTaskHarvestJob | None, recent_jobs: list[ArxivTaskHarvestJob], recent_windows: list[ArxivTaskQueryWindow], recent_papers: list[ArxivTaskPaper], total_papers: int) -> ArxivTaskStatusRead:
     return ArxivTaskStatusRead(
         daily_config=arxiv_task_daily_config_read(daily_config),
-        categories=[arxiv_task_category_read(category) for category in categories],
-        enabled_cat_ids=[category.cat_id for category in categories if category.enabled],
-        coverage_cat_ids=coverage_cat_ids,
+        subscriptions=[arxiv_task_subscription_read(subscription) for subscription in subscriptions],
+        enabled_subscription_ids=[subscription.id for subscription in subscriptions if subscription.enabled],
+        coverage_subscription_ids=coverage_subscription_ids,
         active_job=arxiv_task_job_read(active_job) if active_job is not None else None,
         recent_jobs=[arxiv_task_job_read(job) for job in recent_jobs],
         recent_windows=[arxiv_task_window_read(window) for window in recent_windows],

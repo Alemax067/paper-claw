@@ -6,7 +6,7 @@ from datetime import UTC, datetime, time as day_time
 
 from backend.db.repositories import ArxivTaskRepository
 from backend.db.session import get_session
-from backend.db.types import ArxivTaskDailyStatus, ArxivTaskJobKind, ArxivTaskJobStatus
+from backend.db.types import ArxivTaskDailyStatus
 from backend.services.arxiv_tasks import ArxivTaskService
 
 logger = logging.getLogger(__name__)
@@ -54,17 +54,10 @@ class ArxivTaskScheduler:
         try:
             with get_session() as session:
                 repository = ArxivTaskRepository(session)
-                running = repository.running_job()
                 service = ArxivTaskService(session)
-                if _daily_due(repository) and (running is None or running.kind == ArxivTaskJobKind.history.value):
-                    service.run_daily_once()
-                    return
-                if running is not None and running.kind == ArxivTaskJobKind.history.value:
-                    service.run_history_step(running.id)
-                    return
-                history_jobs = repository.list_running_history_jobs()
-                if history_jobs:
-                    service.run_history_step(history_jobs[0].id)
+                if _daily_due(repository) and repository.active_job() is None:
+                    service.enqueue_daily_run()
+                service.run_next_queue_step()
         finally:
             self._lock.release()
 

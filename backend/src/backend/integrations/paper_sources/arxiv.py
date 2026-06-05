@@ -85,7 +85,7 @@ class ArxivClient:
         self.backoff_max_seconds = backoff_max_seconds
         self.sleep = sleep
         self.arxiv_client = arxiv_client or arxiv.Client(page_size=25, delay_seconds=limiter.min_interval_seconds if limiter is not None else 3.0, num_retries=0)
-        self.http_client = http_client or httpx.Client(follow_redirects=True, timeout=timeout_seconds)
+        self.http_client = http_client or httpx.Client(follow_redirects=True, timeout=timeout_seconds, trust_env=False)
 
     def search(self, query: str, max_results: int = 10, *, mode: str = "auto", offset: int = 0) -> PaperSourceSearchResponse:
         warnings: list[str] = []
@@ -105,16 +105,23 @@ class ArxivClient:
             results = results[offset:]
         return PaperSourceSearchResponse(results=[self._to_search_result(result) for result in results[:max_results]], query_used=query_used, warnings=warnings)
 
+    def query_metadata(self, search_query: str, *, page_size: int = 5, offset: int = 0) -> ArxivMetadataQueryResponse:
+        query = _validate_search_query(search_query)
+        page_size = max(1, min(page_size, 200))
+        offset = max(0, offset)
+        response = self._metadata_request(query, page_size=page_size, offset=offset, sort_order="descending")
+        return _parse_metadata_response(response.text, query, offset, page_size)
+
     def query_metadata_window(
         self,
-        cat_id: str,
+        search_query: str,
         start_time: datetime,
         end_time: datetime,
         *,
         page_size: int = 100,
         offset: int = 0,
     ) -> ArxivMetadataQueryResponse:
-        cat_id = _validate_cat_id(cat_id)
+        base_query = _validate_search_query(search_query)
         start_time = _as_utc(start_time)
         end_time = _as_utc(end_time)
         if end_time <= start_time:
@@ -123,8 +130,11 @@ class ArxivClient:
             raise ValueError("arXiv metadata window cannot exceed one day")
         page_size = max(1, min(page_size, 200))
         offset = max(0, offset)
-        query = f"cat:{cat_id} AND submittedDate:[{_arxiv_datetime(start_time)} TO {_arxiv_datetime(end_time)}]"
+        query = f"({base_query}) AND submittedDate:[{_arxiv_datetime(start_time)} TO {_arxiv_datetime(end_time)}]"
+        response = self._metadata_request(query, page_size=page_size, offset=offset, sort_order="ascending")
+        return _parse_metadata_response(response.text, query, offset, page_size)
 
+    def _metadata_request(self, query: str, *, page_size: int, offset: int, sort_order: str) -> httpx.Response:
         def fetch() -> httpx.Response:
             response = self.http_client.get(
                 "https://export.arxiv.org/api/query",
@@ -133,14 +143,13 @@ class ArxivClient:
                     "start": offset,
                     "max_results": page_size,
                     "sortBy": "submittedDate",
-                    "sortOrder": "ascending",
+                    "sortOrder": sort_order,
                 },
             )
             response.raise_for_status()
             return response
 
-        response = self._with_retry(fetch)
-        return _parse_metadata_response(response.text, query, offset, page_size)
+        return self._with_retry(fetch)
 
     def download_pdf(self, pdf_url: str, destination: Path) -> Path:
         return self._download(pdf_url, destination)
@@ -226,10 +235,12 @@ def normalize_arxiv_id(value: str) -> str:
     return normalized
 
 
-def _validate_cat_id(cat_id: str) -> str:
-    stripped = cat_id.strip()
-    if not re.fullmatch(r"[a-z-]+(?:\.[A-Z]{2})?", stripped):
-        raise ValueError(f"Invalid arXiv category id: {cat_id}")
+def _validate_search_query(search_query: str) -> str:
+    stripped = search_query.strip()
+    if not stripped:
+        raise ValueError("arXiv search query cannot be empty")
+    if len(stripped) > 2000:
+        raise ValueError("arXiv search query is too long")
     return stripped
 
 

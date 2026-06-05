@@ -12,8 +12,6 @@ import type {
   RunEventRead,
   RunRead,
   RuntimeSettingsRead,
-  ArxivTaskCategoryRead,
-  ArxivTaskCategoryUpdateRequest,
   ArxivTaskDailyConfigRead,
   ArxivTaskDailyConfigUpdateRequest,
   ArxivTaskHarvestJobRead,
@@ -21,6 +19,11 @@ import type {
   ArxivTaskPaperRead,
   ArxivTaskQueryWindowRead,
   ArxivTaskStatusRead,
+  ArxivTaskSubscriptionCreateRequest,
+  ArxivTaskSubscriptionRead,
+  ArxivTaskSubscriptionTestRead,
+  ArxivTaskSubscriptionTestRequest,
+  ArxivTaskSubscriptionUpdateRequest,
   MemoryRead,
   ThreadDetail,
   ThreadSummary,
@@ -164,12 +167,24 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(request),
     }),
-  listArxivTaskCategories: () => requestJson<ArxivTaskCategoryRead[]>('/api/tasks/arxiv/categories', { cache: 'no-store' }),
-  updateArxivTaskCategories: (request: ArxivTaskCategoryUpdateRequest) =>
-    requestJson<ArxivTaskCategoryRead[]>('/api/tasks/arxiv/categories', {
+  listArxivTaskSubscriptions: () => requestJson<ArxivTaskSubscriptionRead[]>('/api/tasks/arxiv/subscriptions', { cache: 'no-store' }),
+  testArxivTaskSubscriptionQuery: (request: ArxivTaskSubscriptionTestRequest) =>
+    requestJson<ArxivTaskSubscriptionTestRead>('/api/tasks/arxiv/subscriptions/test-query', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    }),
+  createArxivTaskSubscription: (request: ArxivTaskSubscriptionCreateRequest) =>
+    requestJson<ArxivTaskSubscriptionRead>('/api/tasks/arxiv/subscriptions', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    }),
+  updateArxivTaskSubscription: (subscriptionId: number, request: ArxivTaskSubscriptionUpdateRequest) =>
+    requestJson<ArxivTaskSubscriptionRead>(`/api/tasks/arxiv/subscriptions/${subscriptionId}`, {
       method: 'PUT',
       body: JSON.stringify(request),
     }),
+  deleteArxivTaskSubscription: (subscriptionId: number) =>
+    requestJson<{ ok: boolean }>(`/api/tasks/arxiv/subscriptions/${subscriptionId}`, { method: 'DELETE' }),
   runArxivTaskDailyNow: () => requestJson<ArxivTaskHarvestJobRead>('/api/tasks/arxiv/daily/run', { method: 'POST' }),
   createArxivTaskHistoryJob: (request: ArxivTaskHistoryJobCreateRequest) =>
     requestJson<ArxivTaskHarvestJobRead>('/api/tasks/arxiv/history-jobs', {
@@ -179,17 +194,17 @@ export const api = {
   startArxivTaskHistoryJob: (jobId: number) => requestJson<ArxivTaskHarvestJobRead>(`/api/tasks/arxiv/history-jobs/${jobId}/start`, { method: 'POST' }),
   pauseArxivTaskHistoryJob: (jobId: number) => requestJson<ArxivTaskHarvestJobRead>(`/api/tasks/arxiv/history-jobs/${jobId}/pause`, { method: 'POST' }),
   stopArxivTaskHistoryJob: (jobId: number) => requestJson<ArxivTaskHarvestJobRead>(`/api/tasks/arxiv/history-jobs/${jobId}/stop`, { method: 'POST' }),
-  listArxivTaskWindows: (catId?: string | null, limit = 100) => {
+  listArxivTaskWindows: (subscriptionId?: number | null, limit = 100) => {
     const params = new URLSearchParams({ limit: String(limit) });
-    if (catId) {
-      params.set('cat_id', catId);
+    if (subscriptionId) {
+      params.set('subscription_id', String(subscriptionId));
     }
     return requestJson<ArxivTaskQueryWindowRead[]>(`/api/tasks/arxiv/windows?${params.toString()}`, { cache: 'no-store' });
   },
-  listArxivTaskPapers: (catId?: string | null, limit = 50, offset = 0) => {
+  listArxivTaskPapers: (subscriptionId?: number | null, limit = 50, offset = 0) => {
     const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
-    if (catId) {
-      params.set('cat_id', catId);
+    if (subscriptionId) {
+      params.set('subscription_id', String(subscriptionId));
     }
     return requestJson<ArxivTaskPaperRead[]>(`/api/tasks/arxiv/papers?${params.toString()}`, { cache: 'no-store' });
   },

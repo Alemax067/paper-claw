@@ -328,25 +328,34 @@ class ArxivTaskDailyConfigUpdateRequest(BaseModel):
     run_time: str
 
 
-class ArxivTaskCategoryRead(BaseModel):
+class ArxivTaskSubscriptionRead(BaseModel):
     id: int
-    cat_id: str
-    top_area: str
-    group: str | None = None
-    group_code: str | None = None
-    archive: str
     name: str
+    query: str
     description: str | None = None
-    is_alias: bool
-    alias_of: str | None = None
-    api_exact_query: str
     enabled: bool
+    last_refreshed_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
 
-class ArxivTaskCategoryUpdateRequest(BaseModel):
-    enabled_cat_ids: list[str] = Field(default_factory=list)
+class ArxivTaskSubscriptionCreateRequest(BaseModel):
+    name: str
+    query: str
+    description: str | None = None
+    enabled: bool = True
+
+
+class ArxivTaskSubscriptionUpdateRequest(BaseModel):
+    name: str
+    query: str
+    description: str | None = None
+    enabled: bool = True
+
+
+class ArxivTaskSubscriptionTestRequest(BaseModel):
+    query: str
+    max_results: int = Field(default=5, ge=1, le=20)
 
 
 class ArxivTaskPaperRead(BaseModel):
@@ -369,9 +378,29 @@ class ArxivTaskPaperRead(BaseModel):
     updated_at: datetime
 
 
+class ArxivTaskSubscriptionTestPaperRead(BaseModel):
+    arxiv_id: str
+    title: str
+    abstract: str | None = None
+    authors: list[str] = Field(default_factory=list)
+    primary_category: str | None = None
+    categories: list[str] = Field(default_factory=list)
+    published_at: datetime | None = None
+    updated_at_source: datetime | None = None
+    landing_page_url: str | None = None
+    pdf_url: str | None = None
+
+
+class ArxivTaskSubscriptionTestRead(BaseModel):
+    query: str
+    total_results: int
+    papers: list[ArxivTaskSubscriptionTestPaperRead] = Field(default_factory=list)
+
+
 class ArxivTaskQueryWindowRead(BaseModel):
     id: int
-    cat_id: str
+    subscription_id: int
+    query_snapshot: str
     job_id: int | None = None
     kind: str
     window_start: datetime
@@ -396,7 +425,7 @@ class ArxivTaskHarvestJobRead(BaseModel):
     id: int
     kind: str
     status: str
-    cat_ids: list[str] = Field(default_factory=list)
+    subscription_ids: list[int] = Field(default_factory=list)
     requested_start: datetime | None = None
     requested_end: datetime | None = None
     started_at: datetime | None = None
@@ -408,16 +437,16 @@ class ArxivTaskHarvestJobRead(BaseModel):
 
 
 class ArxivTaskHistoryJobCreateRequest(BaseModel):
-    cat_ids: list[str]
+    subscription_ids: list[int]
     start_time: datetime
     end_time: datetime
 
 
 class ArxivTaskStatusRead(BaseModel):
     daily_config: ArxivTaskDailyConfigRead
-    categories: list[ArxivTaskCategoryRead] = Field(default_factory=list)
-    enabled_cat_ids: list[str] = Field(default_factory=list)
-    coverage_cat_ids: list[str] = Field(default_factory=list)
+    subscriptions: list[ArxivTaskSubscriptionRead] = Field(default_factory=list)
+    enabled_subscription_ids: list[int] = Field(default_factory=list)
+    coverage_subscription_ids: list[int] = Field(default_factory=list)
     active_job: ArxivTaskHarvestJobRead | None = None
     recent_jobs: list[ArxivTaskHarvestJobRead] = Field(default_factory=list)
     recent_windows: list[ArxivTaskQueryWindowRead] = Field(default_factory=list)

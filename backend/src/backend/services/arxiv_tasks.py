@@ -6,10 +6,10 @@ from typing import Protocol
 
 from sqlalchemy.orm import Session
 
-from backend.db.models import ArxivTaskHarvestJob, ArxivTaskQueryWindow
+from backend.db.models import ArxivTaskHarvestJob, ArxivTaskSubscription
 from backend.db.repositories import ArxivTaskRepository
 from backend.db.types import ArxivTaskJobKind, ArxivTaskJobStatus, ArxivTaskWindowStatus
-from backend.integrations.paper_sources.arxiv import ArxivClient, ArxivMetadataEntry
+from backend.integrations.paper_sources.arxiv import ArxivClient, ArxivMetadataEntry, ArxivMetadataQueryResponse
 from backend.integrations.paper_sources.factory import paper_source_adapters_from_settings
 
 PAGE_SIZE = 100
@@ -19,7 +19,8 @@ MAX_WINDOW = timedelta(days=1)
 
 
 class ArxivMetadataClient(Protocol):
-    def query_metadata_window(self, cat_id: str, start_time: datetime, end_time: datetime, *, page_size: int = PAGE_SIZE, offset: int = 0): ...
+    def query_metadata(self, search_query: str, *, page_size: int = 5, offset: int = 0) -> ArxivMetadataQueryResponse: ...
+    def query_metadata_window(self, search_query: str, start_time: datetime, end_time: datetime, *, page_size: int = PAGE_SIZE, offset: int = 0) -> ArxivMetadataQueryResponse: ...
 
 
 @dataclass(frozen=True)
@@ -38,24 +39,71 @@ class HarvestStats:
         )
 
 
+@dataclass(frozen=True)
+class WindowTarget:
+    subscription: ArxivTaskSubscription
+    start: datetime
+    end: datetime
+
+
 class ArxivTaskService:
     def __init__(self, session: Session, *, arxiv_client: ArxivMetadataClient | None = None) -> None:
         self.session = session
         self.repository = ArxivTaskRepository(session)
-        self.arxiv_client = arxiv_client or _arxiv_client_from_settings()
+        self._arxiv_client = arxiv_client
 
-    def update_categories(self, enabled_cat_ids: list[str]):
-        return self.repository.update_enabled_categories(enabled_cat_ids)
+    @property
+    def arxiv_client(self) -> ArxivMetadataClient:
+        if self._arxiv_client is None:
+            self._arxiv_client = _arxiv_client_from_settings()
+        return self._arxiv_client
 
-    def create_history_job(self, cat_ids: list[str], start_time: datetime, end_time: datetime) -> ArxivTaskHarvestJob:
-        self._validate_categories(cat_ids)
+    @arxiv_client.setter
+    def arxiv_client(self, value: ArxivMetadataClient) -> None:
+        self._arxiv_client = value
+
+    def create_subscription(self, *, name: str, query: str, description: str | None = None, enabled: bool = True) -> ArxivTaskSubscription:
+        name = _validate_name(name)
+        query = _validate_query(query)
+        return self.repository.create_subscription(name=name, query=query, description=_clean_optional(description), enabled=enabled)
+
+    def update_subscription(self, subscription_id: int, *, name: str, query: str, description: str | None = None, enabled: bool = True) -> ArxivTaskSubscription:
+        subscription = self.repository.get_subscription(subscription_id)
+        if subscription is None:
+            raise ValueError("arXiv task subscription not found")
+        name = _validate_name(name)
+        query = _validate_query(query)
+        return self.repository.update_subscription(subscription, name=name, query=query, description=_clean_optional(description), enabled=enabled)
+
+    def delete_subscription(self, subscription_id: int) -> None:
+        if not self.repository.delete_subscription(subscription_id):
+            raise ValueError("arXiv task subscription not found")
+
+    def test_query(self, query: str, *, max_results: int = 5) -> ArxivMetadataQueryResponse:
+        return self.arxiv_client.query_metadata(_validate_query(query), page_size=max_results)
+
+    def enqueue_daily_run(self) -> ArxivTaskHarvestJob:
+        subscriptions = self.repository.enabled_subscriptions()
+        now = _now()
+        config = self.repository.daily_config()
+        config.last_started_at = now
+        return self.repository.create_job(
+            ArxivTaskJobKind.daily.value,
+            [subscription.id for subscription in subscriptions],
+            status=ArxivTaskJobStatus.pending.value,
+            requested_end=now,
+            stats_json={},
+        )
+
+    def create_history_job(self, subscription_ids: list[int], start_time: datetime, end_time: datetime) -> ArxivTaskHarvestJob:
+        self._validate_subscription_ids(subscription_ids)
         start_time = _as_utc(start_time)
         end_time = _as_utc(end_time)
         if end_time <= start_time:
             raise ValueError("History job end_time must be after start_time")
         return self.repository.create_job(
             ArxivTaskJobKind.history.value,
-            cat_ids,
+            subscription_ids,
             requested_start=start_time,
             requested_end=end_time,
             status=ArxivTaskJobStatus.paused.value,
@@ -103,58 +151,52 @@ class ArxivTaskService:
         self.session.flush()
         return job
 
-    def run_daily_once(self) -> ArxivTaskHarvestJob:
-        categories = self.repository.enabled_categories()
-        now = _now()
-        config = self.repository.daily_config()
-        config.last_started_at = now
-        job = self.repository.create_job(
-            ArxivTaskJobKind.daily.value,
-            [category.cat_id for category in categories],
-            status=ArxivTaskJobStatus.running.value,
-            started_at=now,
-            stats_json={},
-        )
-        total = HarvestStats()
-        try:
-            for category in categories:
-                for start, end in self._daily_windows(category.cat_id, now):
-                    total = total.add(self.harvest_window(category.cat_id, start, end, job_id=job.id, kind=ArxivTaskJobKind.daily.value))
-            job.status = ArxivTaskJobStatus.succeeded.value
-            job.stats_json = _stats_json(total)
-            job.finished_at = _now()
-            config.last_finished_at = job.finished_at
-        except Exception as exc:
-            job.status = ArxivTaskJobStatus.failed.value
-            job.error_message = str(exc) or type(exc).__name__
-            job.finished_at = _now()
-            raise
-        finally:
+    def run_next_queue_step(self) -> ArxivTaskHarvestJob | None:
+        job = self.repository.running_job()
+        if job is None:
+            job = self.repository.next_pending_job()
+            if job is None:
+                return None
+            job.status = ArxivTaskJobStatus.running.value
+            job.started_at = job.started_at or _now()
+            job.finished_at = None
+            job.error_message = None
             self.session.flush()
-        return job
+        return self.run_job_step(job.id)
 
-    def run_history_step(self, job_id: int) -> ArxivTaskHarvestJob:
+    def run_job_step(self, job_id: int) -> ArxivTaskHarvestJob:
         job = self.session.get(ArxivTaskHarvestJob, job_id)
         if job is None:
-            raise ValueError("History job not found")
-        if job.status != ArxivTaskJobStatus.running.value:
-            return job
-        next_window = self._next_history_window(job)
-        if next_window is None:
-            job.status = ArxivTaskJobStatus.succeeded.value
+            raise ValueError("Harvest job not found")
+        if job.status == ArxivTaskJobStatus.stopping.value:
+            job.status = ArxivTaskJobStatus.stopped.value
             job.finished_at = _now()
             self.session.flush()
             return job
-        cat_id, start, end = next_window
+        if job.status != ArxivTaskJobStatus.running.value:
+            return job
+        target = self._next_window(job)
+        if target is None:
+            job.status = ArxivTaskJobStatus.succeeded.value
+            job.finished_at = _now()
+            if job.kind == ArxivTaskJobKind.daily.value:
+                config = self.repository.daily_config()
+                config.last_finished_at = job.finished_at
+            self.session.flush()
+            return job
         try:
-            stats = self.harvest_window(cat_id, start, end, job_id=job.id, kind=ArxivTaskJobKind.history.value)
+            stats = self.harvest_window(target.subscription, target.start, target.end, job_id=job.id, kind=job.kind)
             self.session.refresh(job)
             job.stats_json = _merge_stats(job.stats_json or {}, stats)
         except Exception as exc:
             job.status = ArxivTaskJobStatus.failed.value
             job.error_message = str(exc) or type(exc).__name__
             job.finished_at = _now()
-            raise
+            if job.kind == ArxivTaskJobKind.daily.value:
+                config = self.repository.daily_config()
+                config.last_finished_at = job.finished_at
+            self.session.flush()
+            return job
         finally:
             if job.status == ArxivTaskJobStatus.stopping.value:
                 job.status = ArxivTaskJobStatus.stopped.value
@@ -162,15 +204,17 @@ class ArxivTaskService:
             self.session.flush()
         return job
 
-    def harvest_window(self, cat_id: str, start_time: datetime, end_time: datetime, *, job_id: int | None, kind: str, parent_window_id: int | None = None) -> HarvestStats:
+    def harvest_window(self, subscription: ArxivTaskSubscription, start_time: datetime, end_time: datetime, *, job_id: int | None, kind: str, parent_window_id: int | None = None) -> HarvestStats:
         start_time = _as_utc(start_time)
         end_time = _as_utc(end_time)
         if end_time <= start_time:
             raise ValueError("arXiv window end_time must be after start_time")
         if end_time - start_time > MAX_WINDOW:
             raise ValueError("arXiv window cannot exceed one day")
+        query_snapshot = subscription.query
         window = self.repository.create_window(
-            cat_id,
+            subscription.id,
+            query_snapshot,
             start_time,
             end_time,
             job_id=job_id,
@@ -181,17 +225,17 @@ class ArxivTaskService:
             page_size=PAGE_SIZE,
         )
         try:
-            first_page = self.arxiv_client.query_metadata_window(cat_id, start_time, end_time, page_size=PAGE_SIZE, offset=0)
+            first_page = self.arxiv_client.query_metadata_window(query_snapshot, start_time, end_time, page_size=PAGE_SIZE, offset=0)
             window.total_results = first_page.total_results
             if first_page.total_results > MAX_RESULTS_BEFORE_SPLIT and end_time - start_time > MIN_SPLIT_WINDOW:
                 middle = start_time + (end_time - start_time) / 2
                 window.status = ArxivTaskWindowStatus.split.value
                 window.finished_at = _now()
                 self.session.flush()
-                left = self.harvest_window(cat_id, start_time, middle, job_id=job_id, kind=kind, parent_window_id=window.id)
-                right = self.harvest_window(cat_id, middle, end_time, job_id=job_id, kind=kind, parent_window_id=window.id)
+                left = self.harvest_window(subscription, start_time, middle, job_id=job_id, kind=kind, parent_window_id=window.id)
+                right = self.harvest_window(subscription, middle, end_time, job_id=job_id, kind=kind, parent_window_id=window.id)
                 return left.add(right)
-            stats = self._persist_pages(cat_id, first_page.entries, first_page.total_results, start_time, end_time)
+            stats = self._persist_pages(subscription.id, query_snapshot, first_page.entries, first_page.total_results, start_time, end_time)
             window.fetched_count = stats.fetched_count
             window.inserted_count = stats.inserted_count
             window.updated_count = stats.updated_count
@@ -200,6 +244,7 @@ class ArxivTaskService:
             if window.status == ArxivTaskWindowStatus.partial.value:
                 window.warning_code = "too_many_results_min_window"
             window.finished_at = _now()
+            subscription.last_refreshed_at = window.finished_at
             self.session.flush()
             return stats
         except Exception as exc:
@@ -209,18 +254,18 @@ class ArxivTaskService:
             self.session.flush()
             raise
 
-    def _persist_pages(self, cat_id: str, first_entries: list[ArxivMetadataEntry], total_results: int, start_time: datetime, end_time: datetime) -> HarvestStats:
-        total = self._persist_entries(cat_id, first_entries)
+    def _persist_pages(self, subscription_id: int, query_snapshot: str, first_entries: list[ArxivMetadataEntry], total_results: int, start_time: datetime, end_time: datetime) -> HarvestStats:
+        total = self._persist_entries(subscription_id, query_snapshot, first_entries)
         page_count = 1
         offset = PAGE_SIZE
         while offset < total_results:
-            page = self.arxiv_client.query_metadata_window(cat_id, start_time, end_time, page_size=PAGE_SIZE, offset=offset)
-            total = total.add(self._persist_entries(cat_id, page.entries))
+            page = self.arxiv_client.query_metadata_window(query_snapshot, start_time, end_time, page_size=PAGE_SIZE, offset=offset)
+            total = total.add(self._persist_entries(subscription_id, query_snapshot, page.entries))
             page_count += 1
             offset += PAGE_SIZE
         return HarvestStats(total.fetched_count, total.inserted_count, total.updated_count, page_count)
 
-    def _persist_entries(self, queried_cat_id: str, entries: list[ArxivMetadataEntry]) -> HarvestStats:
+    def _persist_entries(self, subscription_id: int, query_snapshot: str, entries: list[ArxivMetadataEntry]) -> HarvestStats:
         now = _now()
         inserted = 0
         updated = 0
@@ -244,47 +289,53 @@ class ArxivTaskService:
             paper, was_inserted = self.repository.upsert_paper(arxiv_base_id=entry.arxiv_base_id, values=values, now=now)
             inserted += 1 if was_inserted else 0
             updated += 0 if was_inserted else 1
-            self.repository.upsert_paper_category(paper.id, queried_cat_id, is_primary=entry.primary_category == queried_cat_id)
-            for cat_id in entry.categories:
-                self.repository.upsert_paper_category(paper.id, cat_id, is_primary=entry.primary_category == cat_id)
+            self.repository.upsert_paper_subscription(paper.id, subscription_id, query_snapshot=query_snapshot)
         return HarvestStats(fetched_count=len(entries), inserted_count=inserted, updated_count=updated, page_count=0)
 
-    def _daily_windows(self, cat_id: str, end: datetime) -> list[tuple[datetime, datetime]]:
-        start = self.repository.latest_successful_window_end(cat_id) or end - MAX_WINDOW
-        start = _as_utc(start)
-        if start >= end:
-            return []
-        windows = []
-        cursor = start
-        while cursor < end:
-            next_end = min(cursor + MAX_WINDOW, end)
-            windows.append((cursor, next_end))
-            cursor = next_end
-        return windows
+    def _next_window(self, job: ArxivTaskHarvestJob) -> WindowTarget | None:
+        if job.kind == ArxivTaskJobKind.history.value:
+            return self._next_history_window(job)
+        if job.kind == ArxivTaskJobKind.daily.value:
+            return self._next_daily_window(job)
+        return self._next_daily_window(job)
 
-    def _next_history_window(self, job: ArxivTaskHarvestJob) -> tuple[str, datetime, datetime] | None:
+    def _next_daily_window(self, job: ArxivTaskHarvestJob) -> WindowTarget | None:
+        requested_end = _as_utc(job.requested_end or _now())
+        for subscription_id in _subscription_ids(job):
+            subscription = self.repository.get_subscription(subscription_id)
+            if subscription is None:
+                continue
+            start = self.repository.latest_successful_window_end(subscription.id) or requested_end - MAX_WINDOW
+            start = _as_utc(start)
+            if start < requested_end:
+                return WindowTarget(subscription=subscription, start=start, end=min(start + MAX_WINDOW, requested_end))
+        return None
+
+    def _next_history_window(self, job: ArxivTaskHarvestJob) -> WindowTarget | None:
         if job.requested_start is None or job.requested_end is None:
             return None
-        cat_ids = [str(cat_id) for cat_id in job.cat_ids_json or []]
-        existing = {(window.cat_id, _as_utc(window.window_start), _as_utc(window.window_end)) for window in job.windows if window.status in {ArxivTaskWindowStatus.succeeded.value, ArxivTaskWindowStatus.partial.value, ArxivTaskWindowStatus.split.value}}
-        for cat_id in cat_ids:
+        existing = {(window.subscription_id, _as_utc(window.window_start), _as_utc(window.window_end)) for window in job.windows if window.status in {ArxivTaskWindowStatus.succeeded.value, ArxivTaskWindowStatus.partial.value, ArxivTaskWindowStatus.split.value}}
+        for subscription_id in _subscription_ids(job):
+            subscription = self.repository.get_subscription(subscription_id)
+            if subscription is None:
+                continue
             cursor = _as_utc(job.requested_start)
             requested_end = _as_utc(job.requested_end)
             while cursor < requested_end:
                 end = min(cursor + MAX_WINDOW, requested_end)
-                key = (cat_id, cursor, end)
+                key = (subscription.id, cursor, end)
                 if key not in existing:
-                    return key
+                    return WindowTarget(subscription=subscription, start=cursor, end=end)
                 cursor = end
         return None
 
-    def _validate_categories(self, cat_ids: list[str]) -> None:
-        known = {category.cat_id for category in self.repository.list_categories()}
-        unknown = sorted(set(cat_ids) - known)
-        if not cat_ids:
-            raise ValueError("At least one arXiv category is required")
+    def _validate_subscription_ids(self, subscription_ids: list[int]) -> None:
+        if not subscription_ids:
+            raise ValueError("At least one arXiv task subscription is required")
+        known = {subscription.id for subscription in self.repository.list_subscriptions()}
+        unknown = sorted(set(subscription_ids) - known)
         if unknown:
-            raise ValueError(f"Unknown arXiv categories: {', '.join(unknown)}")
+            raise ValueError(f"Unknown arXiv task subscriptions: {', '.join(str(value) for value in unknown)}")
 
 
 def _arxiv_client_from_settings() -> ArxivClient:
@@ -299,6 +350,34 @@ def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+def _validate_name(value: str) -> str:
+    name = value.strip()
+    if not name:
+        raise ValueError("Subscription name is required")
+    if len(name) > 255:
+        raise ValueError("Subscription name is too long")
+    return name
+
+
+def _validate_query(value: str) -> str:
+    if not value.strip():
+        raise ValueError("arXiv query is required")
+    if len(value) > 2000:
+        raise ValueError("arXiv query is too long")
+    return value
+
+
+def _clean_optional(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _subscription_ids(job: ArxivTaskHarvestJob) -> list[int]:
+    return [int(subscription_id) for subscription_id in job.subscription_ids_json or []]
 
 
 def _stats_json(stats: HarvestStats) -> dict[str, int]:

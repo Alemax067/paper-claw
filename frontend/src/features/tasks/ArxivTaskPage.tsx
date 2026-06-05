@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../../api/client';
-import type { ArxivTaskCategoryRead, ArxivTaskHarvestJobRead, ArxivTaskStatusRead } from '../../api/types';
+import type { ArxivTaskHarvestJobRead, ArxivTaskSubscriptionRead, ArxivTaskSubscriptionTestPaperRead, ArxivTaskSubscriptionTestRead } from '../../api/types';
 import { EmptyState } from '../../components/EmptyState';
 import { ErrorBanner } from '../../components/ErrorBanner';
 import { LoadingBlock } from '../../components/LoadingBlock';
@@ -10,49 +10,60 @@ import { usePolling } from '../../hooks/usePolling';
 
 const runningStatuses = new Set(['running', 'pending', 'stopping']);
 
+type SubscriptionDraft = {
+  id: number | null;
+  name: string;
+  query: string;
+  description: string;
+  enabled: boolean;
+  originalQuery: string;
+};
+
+const emptyDraft: SubscriptionDraft = {
+  id: null,
+  name: '',
+  query: '',
+  description: '',
+  enabled: true,
+  originalQuery: '',
+};
+
 export function ArxivTaskPage() {
   const loader = useCallback(() => api.getArxivTaskStatus(), []);
   const { data: status, loading, error, reload } = useAsyncResource(loader, []);
   const [actionError, setActionError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [enabledCatIds, setEnabledCatIds] = useState<string[]>([]);
+  const [testing, setTesting] = useState(false);
   const [dailyEnabled, setDailyEnabled] = useState(true);
   const [runTime, setRunTime] = useState('08:00');
-  const [selectedCoverageCatId, setSelectedCoverageCatId] = useState<string>('');
-  const [historyCatIds, setHistoryCatIds] = useState<string[]>([]);
+  const [selectedCoverageSubscriptionId, setSelectedCoverageSubscriptionId] = useState<number | null>(null);
+  const [historySubscriptionIds, setHistorySubscriptionIds] = useState<number[]>([]);
   const [historyStart, setHistoryStart] = useState(() => defaultDatetimeLocal(-7));
   const [historyEnd, setHistoryEnd] = useState(() => defaultDatetimeLocal(0));
+  const [draft, setDraft] = useState<SubscriptionDraft>(emptyDraft);
+  const [testResult, setTestResult] = useState<ArxivTaskSubscriptionTestRead | null>(null);
 
   useEffect(() => {
     if (!status) {
       return;
     }
-    setEnabledCatIds(status.enabled_cat_ids);
     setDailyEnabled(status.daily_config.enabled);
     setRunTime(status.daily_config.run_time);
-    setSelectedCoverageCatId((current) => current || status.coverage_cat_ids[0] || status.enabled_cat_ids[0] || status.categories[0]?.cat_id || '');
-    setHistoryCatIds((current) => (current.length ? current : status.enabled_cat_ids.slice(0, 1)));
+    setSelectedCoverageSubscriptionId((current) => current ?? status.coverage_subscription_ids[0] ?? status.enabled_subscription_ids[0] ?? status.subscriptions[0]?.id ?? null);
+    setHistorySubscriptionIds((current) => (current.length ? current : status.enabled_subscription_ids.slice(0, 1)));
   }, [status]);
 
   const shouldPoll = Boolean(status?.active_job && runningStatuses.has(status.active_job.status));
   usePolling(reload, 2500, shouldPoll);
 
-  const categoryTree = useMemo(() => buildCategoryTree(status?.categories ?? [], new Set(enabledCatIds)), [enabledCatIds, status?.categories]);
-  const coverageCatIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const catId of status?.coverage_cat_ids ?? []) {
-      ids.add(catId);
-    }
-    for (const catId of status?.enabled_cat_ids ?? []) {
-      ids.add(catId);
-    }
-    return [...ids].sort();
-  }, [status?.coverage_cat_ids, status?.enabled_cat_ids]);
+  const subscriptionById = useMemo(() => new Map((status?.subscriptions ?? []).map((subscription) => [subscription.id, subscription])), [status?.subscriptions]);
   const selectedWindows = useMemo(() => {
-    return (status?.recent_windows ?? []).filter((window) => !selectedCoverageCatId || window.cat_id === selectedCoverageCatId);
-  }, [selectedCoverageCatId, status?.recent_windows]);
+    return (status?.recent_windows ?? []).filter((window) => selectedCoverageSubscriptionId == null || window.subscription_id === selectedCoverageSubscriptionId);
+  }, [selectedCoverageSubscriptionId, status?.recent_windows]);
   const dailyJobs = useMemo(() => (status?.recent_jobs ?? []).filter((job) => job.kind === 'daily'), [status?.recent_jobs]);
   const historyJobs = useMemo(() => (status?.recent_jobs ?? []).filter((job) => job.kind === 'history'), [status?.recent_jobs]);
+  const queryNeedsTest = draft.query.trim().length > 0 && (draft.id == null || draft.query !== draft.originalQuery);
+  const hasCurrentQueryTest = Boolean(testResult && testResult.query === draft.query);
 
   const runAction = async (action: () => Promise<unknown>) => {
     setActionError(null);
@@ -67,25 +78,111 @@ export function ArxivTaskPage() {
     }
   };
 
-  const toggleEnabledCategory = (catId: string) => {
-    setEnabledCatIds((current) => (current.includes(catId) ? current.filter((value) => value !== catId) : [...current, catId].sort()));
-  };
-
-  const toggleHistoryCategory = (catId: string) => {
-    setHistoryCatIds((current) => (current.includes(catId) ? current.filter((value) => value !== catId) : [...current, catId].sort()));
-  };
-
-  const saveCategories = () => runAction(() => api.updateArxivTaskCategories({ enabled_cat_ids: enabledCatIds }));
   const saveDailyConfig = () => runAction(() => api.updateArxivTaskDailyConfig({ enabled: dailyEnabled, run_time: runTime }));
   const runDailyNow = () => runAction(() => api.runArxivTaskDailyNow());
 
-  const createHistoryJob = (event: FormEvent) => {
-    event.preventDefault();
-    if (!historyCatIds.length) {
-      setActionError('Select at least one arXiv category for history backfill.');
+  const resetDraft = () => {
+    setDraft(emptyDraft);
+    setTestResult(null);
+    setActionError(null);
+  };
+
+  const editSubscription = (subscription: ArxivTaskSubscriptionRead) => {
+    setDraft({
+      id: subscription.id,
+      name: subscription.name,
+      query: subscription.query,
+      description: subscription.description ?? '',
+      enabled: subscription.enabled,
+      originalQuery: subscription.query,
+    });
+    setTestResult(null);
+    setActionError(null);
+  };
+
+  const updateDraft = (patch: Partial<SubscriptionDraft>) => {
+    setDraft((current) => ({ ...current, ...patch }));
+    if (patch.query !== undefined) {
+      setTestResult(null);
+    }
+  };
+
+  const testQuery = async () => {
+    const query = draft.query.trim();
+    if (!query) {
+      setActionError('Enter an arXiv advanced query before testing.');
       return;
     }
-    runAction(() => api.createArxivTaskHistoryJob({ cat_ids: historyCatIds, start_time: toIso(historyStart), end_time: toIso(historyEnd) }));
+    setActionError(null);
+    setTesting(true);
+    try {
+      const result = await api.testArxivTaskSubscriptionQuery({ query: draft.query, max_results: 5 });
+      setTestResult(result);
+    } catch (caught) {
+      setActionError(caught instanceof Error ? caught.message : 'Query test failed');
+      setTestResult(null);
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const saveSubscription = (event: FormEvent) => {
+    event.preventDefault();
+    if (!draft.name.trim()) {
+      setActionError('Subscription name is required.');
+      return;
+    }
+    if (!draft.query.trim()) {
+      setActionError('arXiv query is required.');
+      return;
+    }
+    if (queryNeedsTest && !hasCurrentQueryTest) {
+      setActionError('Test this query and review the preview before saving.');
+      return;
+    }
+    const request = {
+      name: draft.name.trim(),
+      query: draft.query,
+      description: draft.description.trim() || null,
+      enabled: draft.enabled,
+    };
+    runAction(async () => {
+      if (draft.id == null) {
+        await api.createArxivTaskSubscription(request);
+      } else {
+        await api.updateArxivTaskSubscription(draft.id, request);
+      }
+      resetDraft();
+    });
+  };
+
+  const toggleSubscriptionEnabled = (subscription: ArxivTaskSubscriptionRead) => {
+    return runAction(() => api.updateArxivTaskSubscription(subscription.id, {
+      name: subscription.name,
+      query: subscription.query,
+      description: subscription.description,
+      enabled: !subscription.enabled,
+    }));
+  };
+
+  const deleteSubscription = (subscription: ArxivTaskSubscriptionRead) => {
+    if (!window.confirm(`Delete subscription "${subscription.name}"? Harvested links and windows for it will be removed.`)) {
+      return;
+    }
+    return runAction(() => api.deleteArxivTaskSubscription(subscription.id));
+  };
+
+  const toggleHistorySubscription = (subscriptionId: number) => {
+    setHistorySubscriptionIds((current) => (current.includes(subscriptionId) ? current.filter((value) => value !== subscriptionId) : [...current, subscriptionId].sort((left, right) => left - right)));
+  };
+
+  const createHistoryJob = (event: FormEvent) => {
+    event.preventDefault();
+    if (!historySubscriptionIds.length) {
+      setActionError('Select at least one arXiv subscription for history backfill.');
+      return;
+    }
+    runAction(() => api.createArxivTaskHistoryJob({ subscription_ids: historySubscriptionIds, start_time: toIso(historyStart), end_time: toIso(historyEnd) }));
   };
 
   const jobAction = (job: ArxivTaskHarvestJobRead, action: 'start' | 'pause' | 'stop') => {
@@ -104,13 +201,13 @@ export function ArxivTaskPage() {
         <div>
           <p className="eyebrow">Task · arXiv</p>
           <h1>Metadata harvest console</h1>
-          <p>Schedule daily submitted-date windows, backfill historical ranges, and keep harvested arXiv metadata separate from curated papers.</p>
+          <p>Run raw arXiv advanced-query subscriptions through a serialized harvest queue, with daily windows and historical backfills.</p>
         </div>
         {status && (
           <div className="task-hero__meters">
-            <Metric label="enabled cats" value={status.enabled_cat_ids.length} />
+            <Metric label="enabled subscriptions" value={status.enabled_subscription_ids.length} />
             <Metric label="task papers" value={status.total_papers} />
-            <Metric label="coverage cats" value={status.coverage_cat_ids.length} />
+            <Metric label="covered subscriptions" value={status.coverage_subscription_ids.length} />
           </div>
         )}
       </header>
@@ -125,19 +222,53 @@ export function ArxivTaskPage() {
           <section className="panel task-panel--wide">
             <div className="panel-header task-panel-header-row">
               <div>
-                <p className="eyebrow">Selector</p>
-                <h2>Daily categories</h2>
+                <p className="eyebrow">Subscriptions</p>
+                <h2>Advanced queries</h2>
               </div>
-              <button className="primary-button" type="button" disabled={saving} onClick={saveCategories}>Save categories</button>
+              {draft.id != null && <button className="secondary-button" type="button" disabled={saving} onClick={resetDraft}>New subscription</button>}
             </div>
-            <div className="panel-body stack">
-              <CategorySelector
-                categories={status.categories}
-                tree={categoryTree}
-                selectedCatIds={enabledCatIds}
-                selectedTitle="Selected daily categories"
-                emptySelectedBody="Choose categories from the collapsed catalog below."
-                onToggle={toggleEnabledCategory}
+            <div className="panel-body task-subscription-layout">
+              <form className="task-subscription-form" onSubmit={saveSubscription}>
+                <label>
+                  Name
+                  <input value={draft.name} onChange={(event) => updateDraft({ name: event.target.value })} placeholder="LLM agents" />
+                </label>
+                <label>
+                  Query
+                  <textarea value={draft.query} onChange={(event) => updateDraft({ query: event.target.value })} placeholder="cat:cs.AI AND (ti:agent OR abs:agent)" rows={5} />
+                </label>
+                <label>
+                  Description
+                  <textarea value={draft.description} onChange={(event) => updateDraft({ description: event.target.value })} rows={3} />
+                </label>
+                <label className="task-check-row">
+                  <input type="checkbox" checked={draft.enabled} onChange={(event) => updateDraft({ enabled: event.target.checked })} />
+                  <span>Enabled for daily runs</span>
+                </label>
+                <div className="button-row">
+                  <button className="secondary-button" type="button" disabled={saving || testing || !draft.query.trim()} onClick={testQuery}>Test query</button>
+                  <button className="primary-button" type="submit" disabled={saving || testing || (queryNeedsTest && !hasCurrentQueryTest)}>
+                    {draft.id == null ? 'Save subscription' : 'Update subscription'}
+                  </button>
+                </div>
+              </form>
+
+              <div className="task-query-preview">
+                <div className="section-heading-row">
+                  <h3>Query preview</h3>
+                  {testing && <span>testing...</span>}
+                  {testResult && <span>{testResult.total_results} total</span>}
+                </div>
+                {testResult ? <QueryPreview result={testResult} /> : <EmptyState title="No preview" body="Test the query before saving a new or changed subscription." />}
+              </div>
+
+              <SubscriptionList
+                subscriptions={status.subscriptions}
+                activeId={draft.id}
+                saving={saving}
+                onEdit={editSubscription}
+                onToggleEnabled={toggleSubscriptionEnabled}
+                onDelete={deleteSubscription}
               />
             </div>
           </section>
@@ -145,7 +276,7 @@ export function ArxivTaskPage() {
           <section className="panel">
             <div className="panel-header">
               <p className="eyebrow">Daily</p>
-              <h2>Incremental run</h2>
+              <h2>Incremental queue</h2>
             </div>
             <div className="panel-body stack">
               <div className="task-toggle-row">
@@ -167,7 +298,7 @@ export function ArxivTaskPage() {
                 <Fact label="last finished" value={formatDateTime(status.daily_config.last_finished_at)} />
                 <Fact label="active job" value={status.active_job ? `#${status.active_job.id} · ${status.active_job.kind}` : 'none'} />
               </dl>
-              <JobList jobs={dailyJobs.slice(0, 4)} emptyTitle="No daily jobs yet" />
+              <JobList jobs={dailyJobs.slice(0, 4)} emptyTitle="No daily jobs yet" subscriptionById={subscriptionById} />
             </div>
           </section>
 
@@ -177,8 +308,8 @@ export function ArxivTaskPage() {
                 <p className="eyebrow">Coverage</p>
                 <h2>Retrieved windows</h2>
               </div>
-              <select value={selectedCoverageCatId} onChange={(event) => setSelectedCoverageCatId(event.target.value)}>
-                {coverageCatIds.map((catId) => <option key={catId} value={catId}>{catId}</option>)}
+              <select value={selectedCoverageSubscriptionId ?? ''} onChange={(event) => setSelectedCoverageSubscriptionId(Number(event.target.value) || null)}>
+                {status.subscriptions.map((subscription) => <option key={subscription.id} value={subscription.id}>{subscription.name}</option>)}
               </select>
             </div>
             <div className="panel-body">
@@ -189,9 +320,10 @@ export function ArxivTaskPage() {
                       <div className="meta-row">
                         <StatusBadge status={window.status} />
                         <span>{window.kind}</span>
-                        <span>{formatDateTime(window.window_start)} → {formatDateTime(window.window_end)}</span>
+                        <span>{formatDateTime(window.window_start)} to {formatDateTime(window.window_end)}</span>
                       </div>
                       <div className="task-window-card__bar" />
+                      <p className="task-query-line">{window.query_snapshot}</p>
                       <div className="meta-row">
                         <span>{window.fetched_count} fetched</span>
                         <span>{window.inserted_count} new</span>
@@ -203,7 +335,7 @@ export function ArxivTaskPage() {
                   ))}
                 </div>
               ) : (
-                <EmptyState title="No windows for this category" body="Run Daily or create a history backfill to establish coverage." />
+                <EmptyState title="No windows for this subscription" body="Run Daily or create a history backfill to establish coverage." />
               )}
             </div>
           </section>
@@ -215,14 +347,7 @@ export function ArxivTaskPage() {
             </div>
             <div className="panel-body stack">
               <form className="stack" onSubmit={createHistoryJob}>
-                <CategorySelector
-                  categories={status.categories}
-                  tree={buildCategoryTree(status.categories, new Set(historyCatIds))}
-                  selectedCatIds={historyCatIds}
-                  selectedTitle="Selected history categories"
-                  emptySelectedBody="Select one or more categories for the backfill job."
-                  onToggle={toggleHistoryCategory}
-                />
+                <SubscriptionPicker subscriptions={status.subscriptions} selectedIds={historySubscriptionIds} onToggle={toggleHistorySubscription} />
                 <label>
                   Start time
                   <input type="datetime-local" value={historyStart} onChange={(event) => setHistoryStart(event.target.value)} />
@@ -241,7 +366,7 @@ export function ArxivTaskPage() {
                       <div className="task-job-card__header">
                         <div>
                           <div className="meta-row"><StatusBadge status={job.status} /><span>job #{job.id}</span></div>
-                          <h3>{job.cat_ids.join(', ') || 'no categories'}</h3>
+                          <h3>{jobSubscriptionNames(job, subscriptionById)}</h3>
                         </div>
                         <div className="button-row">
                           <button className="secondary-button" type="button" disabled={saving || job.status === 'running'} onClick={() => jobAction(job, 'start')}>Start</button>
@@ -250,7 +375,7 @@ export function ArxivTaskPage() {
                         </div>
                       </div>
                       <div className="meta-row">
-                        <span>{formatDateTime(job.requested_start)} → {formatDateTime(job.requested_end)}</span>
+                        <span>{formatDateTime(job.requested_start)} to {formatDateTime(job.requested_end)}</span>
                         <span>{statsLabel(job.stats)}</span>
                       </div>
                       {job.error_message && <p className="task-error-text">{job.error_message}</p>}
@@ -281,7 +406,7 @@ export function ArxivTaskPage() {
                       <h3>{paper.title}</h3>
                       <p>{paper.abstract || 'No abstract available.'}</p>
                       <div className="meta-row">
-                        <span>{paper.authors.slice(0, 4).join(', ')}</span>
+                        <span>{stringifyAuthors(paper.authors).slice(0, 4).join(', ')}</span>
                         {paper.landing_page_url && <a href={paper.landing_page_url} target="_blank" rel="noreferrer">arXiv</a>}
                         {paper.pdf_url && <a href={paper.pdf_url} target="_blank" rel="noreferrer">pdf</a>}
                       </div>
@@ -317,80 +442,81 @@ function Fact({ label, value }: { label: string; value: string }) {
   );
 }
 
-function CategorySelector({ categories, tree, selectedCatIds, selectedTitle, emptySelectedBody, onToggle }: { categories: ArxivTaskCategoryRead[]; tree: CategoryArea[]; selectedCatIds: string[]; selectedTitle: string; emptySelectedBody: string; onToggle: (catId: string) => void }) {
-  const selectedSet = new Set(selectedCatIds);
-  const selectedCategories = categories.filter((category) => selectedSet.has(category.cat_id)).sort((left, right) => left.cat_id.localeCompare(right.cat_id));
+function SubscriptionList({ subscriptions, activeId, saving, onEdit, onToggleEnabled, onDelete }: { subscriptions: ArxivTaskSubscriptionRead[]; activeId: number | null; saving: boolean; onEdit: (subscription: ArxivTaskSubscriptionRead) => void; onToggleEnabled: (subscription: ArxivTaskSubscriptionRead) => void; onDelete: (subscription: ArxivTaskSubscriptionRead) => void }) {
+  if (!subscriptions.length) {
+    return <EmptyState title="No subscriptions" body="Create a subscription from an arXiv advanced query to start harvesting." />;
+  }
   return (
-    <div className="task-category-selector">
-      <section className="task-selected-panel">
-        <div className="section-heading-row">
-          <h3>{selectedTitle}</h3>
-          <span>{selectedCategories.length} selected</span>
-        </div>
-        {selectedCategories.length ? (
-          <div className="task-selected-scroll">
-            {selectedCategories.map((category) => (
-              <div key={category.cat_id} className="task-selected-card">
-                <div>
-                  <span className="task-category-card__id">{category.cat_id}</span>
-                  <strong>{category.name}</strong>
-                  <span>{categoryPath(category)}</span>
-                </div>
-                <button type="button" className="task-remove-button" onClick={() => onToggle(category.cat_id)}>Remove</button>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <EmptyState title="No categories selected" body={emptySelectedBody} />
-        )}
-      </section>
-
-      <div className="task-category-accordion">
-        {tree.map((area) => (
-          <Details key={area.key} className="task-category-area" defaultOpen={area.selectedCount > 0}>
-            <summary>
-              <span>{area.label}</span>
-              <span>{area.selectedCount}/{area.totalCount} selected</span>
-            </summary>
-            <div className="task-category-area__body">
-              {area.directCategories.length > 0 && <CategoryLeafGrid categories={area.directCategories} selectedCatIds={selectedCatIds} onToggle={onToggle} />}
-              {area.groups.map((group) => (
-                <Details key={group.key} className="task-category-subgroup" defaultOpen={group.selectedCount > 0}>
-                  <summary>
-                    <span>{group.label}</span>
-                    <span>{group.selectedCount}/{group.categories.length}</span>
-                  </summary>
-                  <CategoryLeafGrid categories={group.categories} selectedCatIds={selectedCatIds} onToggle={onToggle} />
-                </Details>
-              ))}
+    <div className="task-subscription-list">
+      {subscriptions.map((subscription) => (
+        <article key={subscription.id} className={`task-subscription-card ${activeId === subscription.id ? 'is-selected' : ''}`}>
+          <div>
+            <div className="meta-row">
+              <StatusBadge status={subscription.enabled ? 'enabled' : 'disabled'} />
+              <span>#{subscription.id}</span>
+              <span>{formatDateTime(subscription.last_refreshed_at)}</span>
             </div>
-          </Details>
-        ))}
-      </div>
+            <h3>{subscription.name}</h3>
+            {subscription.description && <p>{subscription.description}</p>}
+            <pre>{subscription.query}</pre>
+          </div>
+          <div className="button-row">
+            <button className="secondary-button" type="button" disabled={saving} onClick={() => onEdit(subscription)}>Edit</button>
+            <button className="secondary-button" type="button" disabled={saving} onClick={() => onToggleEnabled(subscription)}>{subscription.enabled ? 'Disable' : 'Enable'}</button>
+            <button className="danger-button" type="button" disabled={saving} onClick={() => onDelete(subscription)}>Delete</button>
+          </div>
+        </article>
+      ))}
     </div>
   );
 }
 
-function Details({ className, defaultOpen, children }: { className: string; defaultOpen: boolean; children: React.ReactNode }) {
-  return defaultOpen ? <details className={className} open>{children}</details> : <details className={className}>{children}</details>;
-}
-
-function CategoryLeafGrid({ categories, selectedCatIds, onToggle }: { categories: ArxivTaskCategoryRead[]; selectedCatIds: string[]; onToggle: (catId: string) => void }) {
+function SubscriptionPicker({ subscriptions, selectedIds, onToggle }: { subscriptions: ArxivTaskSubscriptionRead[]; selectedIds: number[]; onToggle: (subscriptionId: number) => void }) {
+  if (!subscriptions.length) {
+    return <EmptyState title="No subscriptions" body="Create a subscription before backfilling history." />;
+  }
   return (
-    <div className="task-category-grid">
-      {categories.map((category) => (
-        <label key={category.cat_id} className={`task-category-card ${selectedCatIds.includes(category.cat_id) ? 'is-selected' : ''}`} title={category.description ?? undefined}>
-          <input type="checkbox" checked={selectedCatIds.includes(category.cat_id)} onChange={() => onToggle(category.cat_id)} />
-          <span className="task-category-card__id">{category.cat_id}{category.is_alias && <span className="task-alias-badge">alias</span>}</span>
-          <strong>{category.name}</strong>
-          {category.alias_of && <span className="task-category-card__alias">Alias of {category.alias_of}</span>}
+    <div className="task-chip-grid">
+      {subscriptions.map((subscription) => (
+        <label key={subscription.id} className={`task-subscription-chip ${selectedIds.includes(subscription.id) ? 'is-selected' : ''}`}>
+          <input type="checkbox" checked={selectedIds.includes(subscription.id)} onChange={() => onToggle(subscription.id)} />
+          <span>{subscription.name}</span>
         </label>
       ))}
     </div>
   );
 }
 
-function JobList({ jobs, emptyTitle }: { jobs: ArxivTaskHarvestJobRead[]; emptyTitle: string }) {
+function QueryPreview({ result }: { result: ArxivTaskSubscriptionTestRead }) {
+  if (!result.papers.length) {
+    return <EmptyState title="No results" body="The query is valid but returned no preview papers." />;
+  }
+  return (
+    <div className="task-preview-list">
+      {result.papers.map((paper) => <PreviewPaper key={paper.arxiv_id} paper={paper} />)}
+    </div>
+  );
+}
+
+function PreviewPaper({ paper }: { paper: ArxivTaskSubscriptionTestPaperRead }) {
+  return (
+    <article className="task-preview-card">
+      <div className="meta-row">
+        <span>{paper.arxiv_id}</span>
+        {paper.primary_category && <span>{paper.primary_category}</span>}
+        <span>{formatDate(paper.published_at)}</span>
+      </div>
+      <h4>{paper.title}</h4>
+      <p>{paper.abstract || 'No abstract available.'}</p>
+      <div className="meta-row">
+        <span>{paper.authors.slice(0, 3).join(', ')}</span>
+        {paper.landing_page_url && <a href={paper.landing_page_url} target="_blank" rel="noreferrer">arXiv</a>}
+      </div>
+    </article>
+  );
+}
+
+function JobList({ jobs, emptyTitle, subscriptionById }: { jobs: ArxivTaskHarvestJobRead[]; emptyTitle: string; subscriptionById: Map<number, ArxivTaskSubscriptionRead> }) {
   if (!jobs.length) {
     return <EmptyState title={emptyTitle} body="The scheduler records each harvest attempt here." />;
   }
@@ -404,7 +530,7 @@ function JobList({ jobs, emptyTitle }: { jobs: ArxivTaskHarvestJobRead[]; emptyT
             <span>{formatDateTime(job.started_at || job.created_at)}</span>
           </div>
           <div className="meta-row">
-            <span>{job.cat_ids.join(', ') || 'no categories'}</span>
+            <span>{jobSubscriptionNames(job, subscriptionById)}</span>
             <span>{statsLabel(job.stats)}</span>
           </div>
         </div>
@@ -413,65 +539,9 @@ function JobList({ jobs, emptyTitle }: { jobs: ArxivTaskHarvestJobRead[]; emptyT
   );
 }
 
-type CategoryArea = {
-  key: string;
-  label: string;
-  totalCount: number;
-  selectedCount: number;
-  directCategories: ArxivTaskCategoryRead[];
-  groups: CategorySubgroup[];
-};
-
-type CategorySubgroup = {
-  key: string;
-  label: string;
-  selectedCount: number;
-  categories: ArxivTaskCategoryRead[];
-};
-
-function buildCategoryTree(categories: ArxivTaskCategoryRead[], selectedCatIds: Set<string>): CategoryArea[] {
-  const byArea = new Map<string, ArxivTaskCategoryRead[]>();
-  for (const category of categories) {
-    const key = category.top_area || 'arXiv';
-    byArea.set(key, [...(byArea.get(key) ?? []), category]);
-  }
-  return [...byArea.entries()]
-    .map(([area, items]) => {
-      const directCategories: ArxivTaskCategoryRead[] = [];
-      const groups = new Map<string, ArxivTaskCategoryRead[]>();
-      for (const category of sortCategories(items)) {
-        const groupLabel = category.group?.trim();
-        if (groupLabel) {
-          const groupKey = category.group_code ? `${groupLabel} (${category.group_code})` : groupLabel;
-          groups.set(groupKey, [...(groups.get(groupKey) ?? []), category]);
-        } else {
-          directCategories.push(category);
-        }
-      }
-      const groupValues = [...groups.entries()].map(([key, groupItems]) => ({
-        key,
-        label: key,
-        selectedCount: groupItems.filter((category) => selectedCatIds.has(category.cat_id)).length,
-        categories: sortCategories(groupItems),
-      }));
-      return {
-        key: area,
-        label: area,
-        totalCount: items.length,
-        selectedCount: items.filter((category) => selectedCatIds.has(category.cat_id)).length,
-        directCategories,
-        groups: groupValues.sort((left, right) => left.label.localeCompare(right.label)),
-      };
-    })
-    .sort((left, right) => left.label.localeCompare(right.label));
-}
-
-function sortCategories(categories: ArxivTaskCategoryRead[]): ArxivTaskCategoryRead[] {
-  return [...categories].sort((left, right) => left.archive.localeCompare(right.archive) || left.cat_id.localeCompare(right.cat_id));
-}
-
-function categoryPath(category: ArxivTaskCategoryRead): string {
-  return [category.top_area, category.group || category.archive].filter(Boolean).join(' · ');
+function jobSubscriptionNames(job: ArxivTaskHarvestJobRead, subscriptionById: Map<number, ArxivTaskSubscriptionRead>): string {
+  const names = job.subscription_ids.map((id) => subscriptionById.get(id)?.name ?? `#${id}`);
+  return names.join(', ') || 'no subscriptions';
 }
 
 function defaultDatetimeLocal(dayOffset: number): string {
@@ -487,7 +557,7 @@ function toIso(value: string): string {
 
 function formatDateTime(value: string | null): string {
   if (!value) {
-    return '—';
+    return 'none';
   }
   return new Intl.DateTimeFormat(undefined, { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(value));
 }
@@ -504,4 +574,16 @@ function statsLabel(stats: Record<string, number>): string {
   const inserted = stats.inserted_count ?? 0;
   const updated = stats.updated_count ?? 0;
   return `${fetched} fetched · ${inserted} new · ${updated} updated`;
+}
+
+function stringifyAuthors(authors: unknown[]): string[] {
+  return authors.map((author) => {
+    if (typeof author === 'string') {
+      return author;
+    }
+    if (author && typeof author === 'object' && 'name' in author && typeof author.name === 'string') {
+      return author.name;
+    }
+    return String(author);
+  });
 }

@@ -3,10 +3,10 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from backend.db.models import ArxivTaskCategory, ArxivTaskDailyConfig, ArxivTaskHarvestJob, ArxivTaskPaper, ArxivTaskPaperCategory, ArxivTaskQueryWindow
+from backend.db.models import ArxivTaskDailyConfig, ArxivTaskHarvestJob, ArxivTaskPaper, ArxivTaskPaperSubscription, ArxivTaskQueryWindow, ArxivTaskSubscription
 from backend.db.types import ArxivTaskDailyStatus, ArxivTaskJobKind, ArxivTaskJobStatus, ArxivTaskWindowStatus
 
 
@@ -29,36 +29,40 @@ class ArxivTaskRepository:
         self.session.flush()
         return config
 
-    def list_categories(self) -> list[ArxivTaskCategory]:
+    def list_subscriptions(self) -> list[ArxivTaskSubscription]:
         return list(
             self.session.scalars(
-                select(ArxivTaskCategory).order_by(
-                    ArxivTaskCategory.top_area,
-                    ArxivTaskCategory.group,
-                    ArxivTaskCategory.group_code,
-                    ArxivTaskCategory.archive,
-                    ArxivTaskCategory.cat_id,
-                )
+                select(ArxivTaskSubscription).order_by(ArxivTaskSubscription.name, ArxivTaskSubscription.id)
             )
         )
 
-    def enabled_categories(self) -> list[ArxivTaskCategory]:
-        return list(self.session.scalars(select(ArxivTaskCategory).where(ArxivTaskCategory.enabled.is_(True)).order_by(ArxivTaskCategory.cat_id)))
+    def get_subscription(self, subscription_id: int) -> ArxivTaskSubscription | None:
+        return self.session.get(ArxivTaskSubscription, subscription_id)
 
-    def update_enabled_categories(self, enabled_cat_ids: list[str]) -> list[ArxivTaskCategory]:
-        enabled = set(enabled_cat_ids)
-        categories = self.list_categories()
-        known = {category.cat_id for category in categories}
-        unknown = sorted(enabled - known)
-        if unknown:
-            raise ValueError(f"Unknown arXiv categories: {', '.join(unknown)}")
-        for category in categories:
-            category.enabled = category.cat_id in enabled
+    def enabled_subscriptions(self) -> list[ArxivTaskSubscription]:
+        return list(self.session.scalars(select(ArxivTaskSubscription).where(ArxivTaskSubscription.enabled.is_(True)).order_by(ArxivTaskSubscription.name, ArxivTaskSubscription.id)))
+
+    def create_subscription(self, *, name: str, query: str, description: str | None, enabled: bool) -> ArxivTaskSubscription:
+        subscription = ArxivTaskSubscription(name=name, query=query, description=description, enabled=enabled)
+        self.session.add(subscription)
         self.session.flush()
-        return categories
+        return subscription
 
-    def create_job(self, kind: str, cat_ids: list[str], **values: Any) -> ArxivTaskHarvestJob:
-        job = ArxivTaskHarvestJob(kind=kind, cat_ids_json=cat_ids, **values)
+    def update_subscription(self, subscription: ArxivTaskSubscription, *, name: str, query: str, description: str | None, enabled: bool) -> ArxivTaskSubscription:
+        subscription.name = name
+        subscription.query = query
+        subscription.description = description
+        subscription.enabled = enabled
+        self.session.flush()
+        return subscription
+
+    def delete_subscription(self, subscription_id: int) -> bool:
+        result = self.session.execute(delete(ArxivTaskSubscription).where(ArxivTaskSubscription.id == subscription_id))
+        self.session.flush()
+        return bool(result.rowcount)
+
+    def create_job(self, kind: str, subscription_ids: list[int], **values: Any) -> ArxivTaskHarvestJob:
+        job = ArxivTaskHarvestJob(kind=kind, subscription_ids_json=subscription_ids, **values)
         self.session.add(job)
         self.session.flush()
         return job
@@ -69,6 +73,21 @@ class ArxivTaskRepository:
     def running_job(self) -> ArxivTaskHarvestJob | None:
         return self.session.scalar(select(ArxivTaskHarvestJob).where(ArxivTaskHarvestJob.status == ArxivTaskJobStatus.running.value).order_by(ArxivTaskHarvestJob.updated_at.desc()))
 
+    def active_job(self) -> ArxivTaskHarvestJob | None:
+        return self.session.scalar(
+            select(ArxivTaskHarvestJob)
+            .where(ArxivTaskHarvestJob.status.in_([ArxivTaskJobStatus.pending.value, ArxivTaskJobStatus.running.value, ArxivTaskJobStatus.stopping.value]))
+            .order_by(ArxivTaskHarvestJob.updated_at.desc())
+        )
+
+    def next_pending_job(self) -> ArxivTaskHarvestJob | None:
+        return self.session.scalar(
+            select(ArxivTaskHarvestJob)
+            .where(ArxivTaskHarvestJob.status == ArxivTaskJobStatus.pending.value)
+            .order_by(ArxivTaskHarvestJob.created_at, ArxivTaskHarvestJob.id)
+            .limit(1)
+        )
+
     def list_running_history_jobs(self) -> list[ArxivTaskHarvestJob]:
         return list(
             self.session.scalars(
@@ -78,34 +97,34 @@ class ArxivTaskRepository:
             )
         )
 
-    def create_window(self, cat_id: str, window_start: datetime, window_end: datetime, **values: Any) -> ArxivTaskQueryWindow:
-        window = ArxivTaskQueryWindow(cat_id=cat_id, window_start=window_start, window_end=window_end, **values)
+    def create_window(self, subscription_id: int, query_snapshot: str, window_start: datetime, window_end: datetime, **values: Any) -> ArxivTaskQueryWindow:
+        window = ArxivTaskQueryWindow(subscription_id=subscription_id, query_snapshot=query_snapshot, window_start=window_start, window_end=window_end, **values)
         self.session.add(window)
         self.session.flush()
         return window
 
-    def list_windows(self, *, cat_id: str | None = None, limit: int = 100) -> list[ArxivTaskQueryWindow]:
+    def list_windows(self, *, subscription_id: int | None = None, limit: int = 100) -> list[ArxivTaskQueryWindow]:
         statement = select(ArxivTaskQueryWindow).order_by(ArxivTaskQueryWindow.window_start.desc(), ArxivTaskQueryWindow.id.desc()).limit(limit)
-        if cat_id is not None:
-            statement = statement.where(ArxivTaskQueryWindow.cat_id == cat_id)
+        if subscription_id is not None:
+            statement = statement.where(ArxivTaskQueryWindow.subscription_id == subscription_id)
         return list(self.session.scalars(statement))
 
-    def successful_cat_ids_with_papers(self) -> list[str]:
-        rows = self.session.execute(select(ArxivTaskPaperCategory.cat_id).distinct().order_by(ArxivTaskPaperCategory.cat_id)).all()
+    def successful_subscription_ids_with_papers(self) -> list[int]:
+        rows = self.session.execute(select(ArxivTaskPaperSubscription.subscription_id).distinct().order_by(ArxivTaskPaperSubscription.subscription_id)).all()
         return [row[0] for row in rows]
 
-    def latest_successful_window_end(self, cat_id: str) -> datetime | None:
+    def latest_successful_window_end(self, subscription_id: int) -> datetime | None:
         return self.session.scalar(
             select(func.max(ArxivTaskQueryWindow.window_end)).where(
-                ArxivTaskQueryWindow.cat_id == cat_id,
+                ArxivTaskQueryWindow.subscription_id == subscription_id,
                 ArxivTaskQueryWindow.status == ArxivTaskWindowStatus.succeeded.value,
             )
         )
 
-    def list_papers(self, *, cat_id: str | None = None, limit: int = 50, offset: int = 0) -> list[ArxivTaskPaper]:
+    def list_papers(self, *, subscription_id: int | None = None, limit: int = 50, offset: int = 0) -> list[ArxivTaskPaper]:
         statement = select(ArxivTaskPaper).order_by(ArxivTaskPaper.published_at.desc().nullslast(), ArxivTaskPaper.id.desc()).limit(limit).offset(offset)
-        if cat_id is not None:
-            statement = statement.join(ArxivTaskPaperCategory).where(ArxivTaskPaperCategory.cat_id == cat_id)
+        if subscription_id is not None:
+            statement = statement.join(ArxivTaskPaperSubscription).where(ArxivTaskPaperSubscription.subscription_id == subscription_id)
         return list(self.session.scalars(statement))
 
     def count_papers(self) -> int:
@@ -124,12 +143,12 @@ class ArxivTaskRepository:
         self.session.flush()
         return paper, inserted
 
-    def upsert_paper_category(self, paper_id: int, cat_id: str, *, is_primary: bool = False) -> ArxivTaskPaperCategory:
-        link = self.session.scalar(select(ArxivTaskPaperCategory).where(ArxivTaskPaperCategory.paper_id == paper_id, ArxivTaskPaperCategory.cat_id == cat_id))
+    def upsert_paper_subscription(self, paper_id: int, subscription_id: int, *, query_snapshot: str) -> ArxivTaskPaperSubscription:
+        link = self.session.scalar(select(ArxivTaskPaperSubscription).where(ArxivTaskPaperSubscription.paper_id == paper_id, ArxivTaskPaperSubscription.subscription_id == subscription_id))
         if link is None:
-            link = ArxivTaskPaperCategory(paper_id=paper_id, cat_id=cat_id, is_primary=is_primary, created_at=datetime.now().astimezone())
+            link = ArxivTaskPaperSubscription(paper_id=paper_id, subscription_id=subscription_id, query_snapshot=query_snapshot, created_at=datetime.now().astimezone())
             self.session.add(link)
         else:
-            link.is_primary = link.is_primary or is_primary
+            link.query_snapshot = query_snapshot
         self.session.flush()
         return link

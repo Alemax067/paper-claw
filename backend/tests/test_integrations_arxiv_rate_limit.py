@@ -141,10 +141,10 @@ def test_arxiv_metadata_window_builds_submitted_date_query_and_parses_atom():
     start = datetime(2024, 1, 1, tzinfo=UTC)
     end = start + timedelta(hours=12)
 
-    response = client.query_metadata_window("cs.LG", start, end, page_size=500, offset=10)
+    response = client.query_metadata_window("cat:cs.LG", start, end, page_size=500, offset=10)
 
     assert captured["url"] == "https://export.arxiv.org/api/query"
-    assert captured["params"]["search_query"] == "cat:cs.LG AND submittedDate:[202401010000 TO 202401011200]"
+    assert captured["params"]["search_query"] == "(cat:cs.LG) AND submittedDate:[202401010000 TO 202401011200]"
     assert captured["params"]["max_results"] == 200
     assert captured["params"]["start"] == 10
     assert captured["params"]["sortBy"] == "submittedDate"
@@ -163,7 +163,7 @@ def test_arxiv_metadata_window_rejects_windows_over_one_day():
     start = datetime(2024, 1, 1, tzinfo=UTC)
 
     with pytest.raises(ValueError, match="cannot exceed one day"):
-        client.query_metadata_window("cs.LG", start, start + timedelta(days=1, minutes=1))
+        client.query_metadata_window("cat:cs.LG", start, start + timedelta(days=1, minutes=1))
 
 
 def test_arxiv_offset_and_max_results_are_applied():

@@ -1,5 +1,5 @@
 from backend.db.models.artifacts import AcquisitionJob, Artifact, PaperArtifact
-from backend.db.models.arxiv_tasks import ArxivTaskCategory, ArxivTaskDailyConfig, ArxivTaskHarvestJob, ArxivTaskPaper, ArxivTaskPaperCategory, ArxivTaskQueryWindow
+from backend.db.models.arxiv_tasks import ArxivTaskDailyConfig, ArxivTaskHarvestJob, ArxivTaskPaper, ArxivTaskPaperSubscription, ArxivTaskQueryWindow, ArxivTaskSubscription
 from backend.db.models.configuration import ProviderConfig
 from backend.db.models.conversation import Message, Thread
 from backend.db.models.memory import Memory
@@ -22,12 +22,12 @@ __all__ = [
     "AgentRun",
     "AgentRunEvent",
     "Artifact",
-    "ArxivTaskCategory",
     "ArxivTaskDailyConfig",
     "ArxivTaskHarvestJob",
     "ArxivTaskPaper",
-    "ArxivTaskPaperCategory",
+    "ArxivTaskPaperSubscription",
     "ArxivTaskQueryWindow",
+    "ArxivTaskSubscription",
     "DocumentChunk",
     "DocumentSection",
     "Memory",
