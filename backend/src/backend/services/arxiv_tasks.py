@@ -17,6 +17,7 @@ PAGE_SIZE = 100
 MAX_RESULTS_BEFORE_SPLIT = 1000
 MIN_SPLIT_WINDOW = timedelta(hours=1)
 MAX_WINDOW = timedelta(days=1)
+WINDOW_DRIFT_TOLERANCE = timedelta(seconds=60)
 PREVIEW_TIMEOUT_SECONDS = 45.0
 
 
@@ -212,8 +213,8 @@ class ArxivTaskService:
         end_time = _as_utc(end_time)
         if end_time <= start_time:
             raise ValueError("arXiv window end_time must be after start_time")
-        if end_time - start_time > MAX_WINDOW:
-            raise ValueError("arXiv window cannot exceed one day")
+        if end_time - start_time > MAX_WINDOW + WINDOW_DRIFT_TOLERANCE:
+            raise ValueError("arXiv window cannot exceed one day plus scheduler drift tolerance")
         query_snapshot = subscription.query
         window = self.repository.create_window(
             subscription.id,
@@ -311,7 +312,9 @@ class ArxivTaskService:
             start = self.repository.latest_successful_window_end(subscription.id) or requested_end - MAX_WINDOW
             start = _as_utc(start)
             if start < requested_end:
-                return WindowTarget(subscription=subscription, start=start, end=min(start + MAX_WINDOW, requested_end))
+                remaining = requested_end - start
+                end = requested_end if remaining <= MAX_WINDOW + WINDOW_DRIFT_TOLERANCE else start + MAX_WINDOW
+                return WindowTarget(subscription=subscription, start=start, end=end)
         return None
 
     def _next_history_window(self, job: ArxivTaskHarvestJob) -> WindowTarget | None:
@@ -357,13 +360,13 @@ def _arxiv_preview_client() -> ArxivClient:
 
 
 def _now() -> datetime:
-    return datetime.now(UTC)
+    return datetime.now(UTC).replace(microsecond=0)
 
 
 def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
+        return value.replace(tzinfo=UTC, microsecond=0)
+    return value.astimezone(UTC).replace(microsecond=0)
 
 
 def _validate_name(value: str) -> str:

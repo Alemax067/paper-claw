@@ -126,6 +126,72 @@ def test_daily_queue_uses_latest_successful_coverage(session):
     assert all(end - start <= timedelta(days=1) for start, end in window_calls)
 
 
+def test_daily_queue_allows_seconds_level_drift_without_tiny_remainder(session):
+    subscription = create_subscription(session, enabled=True)
+    client = FakeMetadataClient(total_results=0)
+    service = ArxivTaskService(session, arxiv_client=client)
+    start = datetime(2024, 1, 1, 8, 0, 0, tzinfo=UTC)
+    requested_end = start + timedelta(days=1, seconds=7, microseconds=123456)
+    service.repository.create_window(
+        subscription.id,
+        subscription.query,
+        start - timedelta(days=1),
+        start,
+        kind=ArxivTaskJobKind.daily.value,
+        status=ArxivTaskWindowStatus.succeeded.value,
+    )
+    job = service.repository.create_job(
+        ArxivTaskJobKind.daily.value,
+        [subscription.id],
+        status=ArxivTaskJobStatus.running.value,
+        requested_end=requested_end,
+        stats_json={},
+    )
+
+    service.run_job_step(job.id)
+    service.run_job_step(job.id)
+    session.commit()
+
+    window_calls = [(start_time, end_time) for _, start_time, end_time, _, _ in client.calls or [] if start_time is not None and end_time is not None]
+    assert window_calls == [(start, requested_end.replace(microsecond=0))]
+    assert job.status == ArxivTaskJobStatus.succeeded.value
+
+
+def test_daily_queue_still_splits_beyond_drift_tolerance(session):
+    subscription = create_subscription(session, enabled=True)
+    client = FakeMetadataClient(total_results=0)
+    service = ArxivTaskService(session, arxiv_client=client)
+    start = datetime(2024, 1, 1, 8, 0, 0, tzinfo=UTC)
+    requested_end = start + timedelta(days=1, seconds=90)
+    service.repository.create_window(
+        subscription.id,
+        subscription.query,
+        start - timedelta(days=1),
+        start,
+        kind=ArxivTaskJobKind.daily.value,
+        status=ArxivTaskWindowStatus.succeeded.value,
+    )
+    job = service.repository.create_job(
+        ArxivTaskJobKind.daily.value,
+        [subscription.id],
+        status=ArxivTaskJobStatus.running.value,
+        requested_end=requested_end,
+        stats_json={},
+    )
+
+    service.run_job_step(job.id)
+    service.run_job_step(job.id)
+    service.run_job_step(job.id)
+    session.commit()
+
+    window_calls = [(start_time, end_time) for _, start_time, end_time, _, _ in client.calls or [] if start_time is not None and end_time is not None]
+    assert window_calls == [
+        (start, start + timedelta(days=1)),
+        (start + timedelta(days=1), requested_end),
+    ]
+    assert job.status == ArxivTaskJobStatus.succeeded.value
+
+
 def test_subscription_query_is_preserved_verbatim(session):
     service = ArxivTaskService(session, arxiv_client=FakeMetadataClient())
     subscription = service.create_subscription(name="Verbatim", query="  cat:cs.AI AND ti:agent  ", enabled=True)
