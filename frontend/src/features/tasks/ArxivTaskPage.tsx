@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { api } from '../../api/client';
 import type {
   ArxivTaskHarvestJobRead,
@@ -14,8 +14,22 @@ import { LoadingBlock } from '../../components/LoadingBlock';
 import { StatusBadge } from '../../components/StatusBadge';
 import { useAsyncResource } from '../../hooks/useAsyncResource';
 import { usePolling } from '../../hooks/usePolling';
+import { localTimeToUtcTime, utcTimeToLocalTime } from './taskTime';
+import { windowRerunActionLabel } from './windowActions';
+import { buildWindowTimeline, type WindowTimelineSegment } from './windowTimeline';
 
 const runningStatuses = new Set(['running', 'pending', 'stopping']);
+const PAPER_PAGE_SIZE = 20;
+
+type WindowRangeSelection = {
+  key: string;
+  label: string;
+  status: string;
+  start: string;
+  end: string;
+  fetchedCount: number;
+  windowIds: number[];
+};
 
 type SubscriptionDraft = {
   id: number | null;
@@ -53,13 +67,17 @@ export function ArxivTaskPage() {
   const [detailWindows, setDetailWindows] = useState<ArxivTaskQueryWindowRead[]>([]);
   const [detailPapers, setDetailPapers] = useState<ArxivTaskPaperRead[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [paperLoading, setPaperLoading] = useState(false);
+  const [paperOffset, setPaperOffset] = useState(0);
+  const [hasMorePapers, setHasMorePapers] = useState(false);
+  const [selectedWindowRange, setSelectedWindowRange] = useState<WindowRangeSelection | null>(null);
 
   useEffect(() => {
     if (!status) {
       return;
     }
     setDailyEnabled(status.daily_config.enabled);
-    setRunTime(status.daily_config.run_time);
+    setRunTime(utcTimeToLocalTime(status.daily_config.run_time));
     const fallbackId = status.coverage_subscription_ids[0] ?? status.enabled_subscription_ids[0] ?? status.subscriptions[0]?.id ?? null;
     setSelectedSubscriptionId((current) => (current != null && status.subscriptions.some((subscription) => subscription.id === current) ? current : fallbackId));
     setHistorySubscriptionIds((current) => {
@@ -73,7 +91,6 @@ export function ArxivTaskPage() {
 
   const subscriptionById = useMemo(() => new Map((status?.subscriptions ?? []).map((subscription) => [subscription.id, subscription])), [status?.subscriptions]);
   const selectedSubscription = selectedSubscriptionId == null ? null : subscriptionById.get(selectedSubscriptionId) ?? null;
-  const dailyJobs = useMemo(() => (status?.recent_jobs ?? []).filter((job) => job.kind === 'daily'), [status?.recent_jobs]);
   const historyJobs = useMemo(() => (status?.recent_jobs ?? []).filter((job) => job.kind === 'history'), [status?.recent_jobs]);
   const selectedHistoryJobs = useMemo(() => {
     if (selectedSubscriptionId == null) {
@@ -83,29 +100,28 @@ export function ArxivTaskPage() {
   }, [historyJobs, selectedSubscriptionId]);
   const queryNeedsTest = draft.query.trim().length > 0 && (draft.id == null || draft.query !== draft.originalQuery);
   const hasCurrentQueryTest = Boolean(testResult && testResult.query === draft.query);
+  const runTimeUtc = localTimeToUtcTime(runTime);
+
+  useEffect(() => {
+    setSelectedWindowRange(null);
+  }, [selectedSubscriptionId]);
 
   useEffect(() => {
     if (selectedSubscriptionId == null) {
       setDetailWindows([]);
-      setDetailPapers([]);
       return;
     }
     let active = true;
     setDetailLoading(true);
-    Promise.all([
-      api.listArxivTaskWindows(selectedSubscriptionId, 100),
-      api.listArxivTaskPapers(selectedSubscriptionId, 20, 0),
-    ])
-      .then(([windows, papers]) => {
-        if (!active) {
-          return;
+    api.listArxivTaskWindows(selectedSubscriptionId, 100)
+      .then((windows) => {
+        if (active) {
+          setDetailWindows(windows);
         }
-        setDetailWindows(windows);
-        setDetailPapers(papers);
       })
       .catch((caught) => {
         if (active) {
-          setActionError(caught instanceof Error ? caught.message : 'Failed to load subscription detail');
+          setActionError(caught instanceof Error ? caught.message : 'Failed to load subscription windows');
         }
       })
       .finally(() => {
@@ -117,6 +133,39 @@ export function ArxivTaskPage() {
       active = false;
     };
   }, [selectedSubscriptionId, status]);
+
+  useEffect(() => {
+    if (selectedSubscriptionId == null) {
+      setDetailPapers([]);
+      setPaperOffset(0);
+      setHasMorePapers(false);
+      return;
+    }
+    let active = true;
+    setPaperLoading(true);
+    api.listArxivTaskPapers(selectedSubscriptionId, PAPER_PAGE_SIZE, 0, selectedWindowRange?.start, selectedWindowRange?.end)
+      .then((papers) => {
+        if (!active) {
+          return;
+        }
+        setDetailPapers(papers);
+        setPaperOffset(papers.length);
+        setHasMorePapers(papers.length === PAPER_PAGE_SIZE);
+      })
+      .catch((caught) => {
+        if (active) {
+          setActionError(caught instanceof Error ? caught.message : 'Failed to load subscription papers');
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setPaperLoading(false);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [selectedSubscriptionId, selectedWindowRange]);
 
   const runAction = async (action: () => Promise<unknown>) => {
     setActionError(null);
@@ -131,7 +180,7 @@ export function ArxivTaskPage() {
     }
   };
 
-  const saveDailyConfig = () => runAction(() => api.updateArxivTaskDailyConfig({ enabled: dailyEnabled, run_time: runTime }));
+  const saveDailyConfig = () => runAction(() => api.updateArxivTaskDailyConfig({ enabled: dailyEnabled, run_time: runTimeUtc }));
   const runDailyNow = () => runAction(() => api.runArxivTaskDailyNow());
 
   const closeModal = () => {
@@ -260,14 +309,81 @@ export function ArxivTaskPage() {
     return runAction(() => api.stopArxivTaskHistoryJob(job.id));
   };
 
+  const loadMorePapers = async () => {
+    if (selectedSubscriptionId == null || paperLoading) {
+      return;
+    }
+    setActionError(null);
+    setPaperLoading(true);
+    try {
+      const papers = await api.listArxivTaskPapers(selectedSubscriptionId, PAPER_PAGE_SIZE, paperOffset, selectedWindowRange?.start, selectedWindowRange?.end);
+      setDetailPapers((current) => [...current, ...papers]);
+      setPaperOffset((current) => current + papers.length);
+      setHasMorePapers(papers.length === PAPER_PAGE_SIZE);
+    } catch (caught) {
+      setActionError(caught instanceof Error ? caught.message : 'Failed to load more papers');
+    } finally {
+      setPaperLoading(false);
+    }
+  };
+
+  const retryWindow = (window: ArxivTaskQueryWindowRead) => {
+    runAction(async () => {
+      const job = await api.createArxivTaskHistoryJob({ subscription_ids: [window.subscription_id], start_time: window.window_start, end_time: window.window_end });
+      await api.startArxivTaskHistoryJob(job.id);
+    });
+  };
+
   return (
     <main className="task-page task-workspace">
       <header className="workspace-header task-hero">
-        <div>
+        <div className="task-hero__intro">
           <p className="eyebrow">Task · arXiv</p>
           <h1>Metadata harvest console</h1>
           <p>Run raw arXiv advanced-query subscriptions through a serialized harvest queue.</p>
         </div>
+        {status && (
+          <div className="task-hero__dashboard">
+            <section className="task-hero-card task-hero-card--overview">
+              <div className="task-hero-card__header">
+                <p className="eyebrow">Overview</p>
+                <h2>Queue state</h2>
+              </div>
+              <div className="task-hero__meters">
+                <Metric label="enabled subscriptions" value={status.enabled_subscription_ids.length} />
+                <Metric label="task papers" value={status.total_papers} />
+                <Metric label="covered subscriptions" value={status.coverage_subscription_ids.length} />
+              </div>
+              <dl className="task-facts">
+                <Fact label="active job" value={status.active_job ? `#${status.active_job.id} · ${status.active_job.kind} · ${status.active_job.status}` : 'none'} />
+                <Fact label="last daily started" value={formatDateTime(status.daily_config.last_started_at)} />
+                <Fact label="last daily finished" value={formatDateTime(status.daily_config.last_finished_at)} />
+              </dl>
+            </section>
+
+            <section className="task-hero-card task-hero-card--daily">
+              <div className="task-hero-card__header">
+                <p className="eyebrow">Daily</p>
+                <h2>Incremental run</h2>
+              </div>
+              <div className="task-toggle-row">
+                <label className="task-check-row">
+                  <input type="checkbox" checked={dailyEnabled} onChange={(event) => setDailyEnabled(event.target.checked)} />
+                  <span>Enable scheduler</span>
+                </label>
+                <label>
+                  Run time
+                  <input type="time" value={runTime} onChange={(event) => setRunTime(event.target.value)} />
+                  <span className="meta-row">Browser timezone · saved as {runTimeUtc} UTC</span>
+                </label>
+              </div>
+              <div className="button-row">
+                <button className="secondary-button" type="button" disabled={saving} onClick={saveDailyConfig}>Save schedule</button>
+                <button className="primary-button" type="button" disabled={saving} onClick={runDailyNow}>Run daily now</button>
+              </div>
+            </section>
+          </div>
+        )}
       </header>
 
       <ErrorBanner message={error} />
@@ -277,51 +393,6 @@ export function ArxivTaskPage() {
 
       {status && (
         <>
-          <div className="task-top-grid">
-            <section className="panel">
-              <div className="panel-header">
-                <p className="eyebrow">Overview</p>
-                <h2>Queue state</h2>
-              </div>
-              <div className="panel-body stack">
-                <div className="task-hero__meters">
-                  <Metric label="enabled subscriptions" value={status.enabled_subscription_ids.length} />
-                  <Metric label="task papers" value={status.total_papers} />
-                  <Metric label="covered subscriptions" value={status.coverage_subscription_ids.length} />
-                </div>
-                <dl className="task-facts">
-                  <Fact label="active job" value={status.active_job ? `#${status.active_job.id} · ${status.active_job.kind} · ${status.active_job.status}` : 'none'} />
-                  <Fact label="last daily started" value={formatDateTime(status.daily_config.last_started_at)} />
-                  <Fact label="last daily finished" value={formatDateTime(status.daily_config.last_finished_at)} />
-                </dl>
-              </div>
-            </section>
-
-            <section className="panel">
-              <div className="panel-header">
-                <p className="eyebrow">Daily</p>
-                <h2>Incremental run</h2>
-              </div>
-              <div className="panel-body stack">
-                <div className="task-toggle-row">
-                  <label className="task-check-row">
-                    <input type="checkbox" checked={dailyEnabled} onChange={(event) => setDailyEnabled(event.target.checked)} />
-                    <span>Enable scheduler</span>
-                  </label>
-                  <label>
-                    Run time UTC
-                    <input type="time" value={runTime} onChange={(event) => setRunTime(event.target.value)} />
-                  </label>
-                </div>
-                <div className="button-row">
-                  <button className="secondary-button" type="button" disabled={saving} onClick={saveDailyConfig}>Save schedule</button>
-                  <button className="primary-button" type="button" disabled={saving} onClick={runDailyNow}>Run daily now</button>
-                </div>
-                <JobList jobs={dailyJobs.slice(0, 3)} emptyTitle="No daily jobs yet" subscriptionById={subscriptionById} compact />
-              </div>
-            </section>
-          </div>
-
           <div className="task-main-grid">
             <section className="panel task-subscription-list-panel">
               <div className="panel-header task-panel-header-row">
@@ -361,6 +432,9 @@ export function ArxivTaskPage() {
                     windows={detailWindows}
                     papers={detailPapers}
                     loading={detailLoading}
+                    paperLoading={paperLoading}
+                    hasMorePapers={hasMorePapers}
+                    selectedWindowRange={selectedWindowRange}
                     historySubscriptionIds={historySubscriptionIds}
                     subscriptions={status.subscriptions}
                     historyStart={historyStart}
@@ -373,6 +447,10 @@ export function ArxivTaskPage() {
                     onHistoryEndChange={setHistoryEnd}
                     onCreateHistoryJob={createHistoryJob}
                     onJobAction={jobAction}
+                    onSelectWindowRange={setSelectedWindowRange}
+                    onClearWindowRange={() => setSelectedWindowRange(null)}
+                    onLoadMorePapers={loadMorePapers}
+                    onRetryWindow={retryWindow}
                   />
                 ) : (
                   <EmptyState title="No subscription selected" body="Create or select a subscription to inspect its query, windows, papers, and backfill jobs." />
@@ -442,10 +520,12 @@ function SubscriptionList({ subscriptions, activeId, onSelect }: { subscriptions
 }
 
 function SubscriptionDetail({
-  subscription,
   windows,
   papers,
   loading,
+  paperLoading,
+  hasMorePapers,
+  selectedWindowRange,
   historySubscriptionIds,
   subscriptions,
   historyStart,
@@ -458,11 +538,18 @@ function SubscriptionDetail({
   onHistoryEndChange,
   onCreateHistoryJob,
   onJobAction,
+  onSelectWindowRange,
+  onClearWindowRange,
+  onLoadMorePapers,
+  onRetryWindow,
 }: {
   subscription: ArxivTaskSubscriptionRead;
   windows: ArxivTaskQueryWindowRead[];
   papers: ArxivTaskPaperRead[];
   loading: boolean;
+  paperLoading: boolean;
+  hasMorePapers: boolean;
+  selectedWindowRange: WindowRangeSelection | null;
   historySubscriptionIds: number[];
   subscriptions: ArxivTaskSubscriptionRead[];
   historyStart: string;
@@ -475,44 +562,54 @@ function SubscriptionDetail({
   onHistoryEndChange: (value: string) => void;
   onCreateHistoryJob: (event: FormEvent) => void;
   onJobAction: (job: ArxivTaskHarvestJobRead, action: 'start' | 'pause' | 'stop') => void;
+  onSelectWindowRange: (range: WindowRangeSelection) => void;
+  onClearWindowRange: () => void;
+  onLoadMorePapers: () => void;
+  onRetryWindow: (window: ArxivTaskQueryWindowRead) => void;
 }) {
   return (
     <>
-      <section className="task-detail-card">
-        <div className="task-detail-card__header">
-          <div className="meta-row">
-            <StatusBadge status={subscription.enabled ? 'enabled' : 'disabled'} />
-            <span>#{subscription.id}</span>
-            <span>last refreshed {formatDateTime(subscription.last_refreshed_at)}</span>
-          </div>
-        </div>
-        {subscription.description && <p>{subscription.description}</p>}
-        <pre>{subscription.query}</pre>
-      </section>
-
-      <div className="task-detail-columns">
+      <div className="task-detail-stack">
         <section className="task-detail-card">
           <div className="section-heading-row">
             <h3>Retrieved windows</h3>
             {loading && <span>loading...</span>}
           </div>
-          {windows.length ? <WindowList windows={windows.slice(0, 12)} /> : <EmptyState title="No windows" body="Run daily or create a backfill job for this subscription." />}
+          {windows.length ? (
+            <WindowList
+              windows={windows}
+              selectedRangeKey={selectedWindowRange?.key ?? null}
+              saving={saving}
+              onSelectRange={onSelectWindowRange}
+              onRetryWindow={onRetryWindow}
+            />
+          ) : <EmptyState title="No windows" body="Run daily or create a backfill job for this subscription." />}
         </section>
 
-        <section className="task-detail-card">
+        <section className="task-detail-card task-papers-card">
           <div className="section-heading-row">
-            <h3>Latest papers</h3>
-            {loading && <span>loading...</span>}
+            <div>
+              <h3>Papers</h3>
+              <p className="task-section-note">{selectedWindowRange ? `${selectedWindowRange.label} · ${selectedWindowRange.fetchedCount} fetched` : 'All harvested papers for this subscription'}</p>
+            </div>
+            <div className="button-row">
+              {selectedWindowRange && <button className="secondary-button" type="button" onClick={onClearWindowRange}>Clear filter</button>}
+              {paperLoading && <span>loading...</span>}
+            </div>
           </div>
-          {papers.length ? <PaperList papers={papers.slice(0, 8)} /> : <EmptyState title="No papers" body="Harvested metadata matching this subscription will appear here." />}
+          {selectedWindowRange?.status === 'failed' && <p className="task-error-text">This window failed. Retry it to harvest papers for the same time range.</p>}
+          <div className="task-papers-scroll">
+            {papers.length ? <PaperList papers={papers} /> : <EmptyState title="No papers" body={selectedWindowRange ? "No harvested metadata is available in this selected time range." : "Harvested metadata matching this subscription will appear here."} />}
+          </div>
+          {hasMorePapers && <button className="secondary-button" type="button" disabled={paperLoading} onClick={onLoadMorePapers}>Load more papers</button>}
         </section>
       </div>
 
-      <section className="task-detail-card">
-        <div className="section-heading-row">
+      <details className="task-detail-card task-history-card">
+        <summary className="section-heading-row">
           <h3>History backfill</h3>
           <span>{historySubscriptionIds.length} selected</span>
-        </div>
+        </summary>
         <form className="task-history-form" onSubmit={onCreateHistoryJob}>
           <SubscriptionPicker subscriptions={subscriptions} selectedIds={historySubscriptionIds} onToggle={onToggleHistorySubscription} />
           <label>
@@ -526,7 +623,7 @@ function SubscriptionDetail({
           <button className="primary-button" type="submit" disabled={saving}>Create history job</button>
         </form>
         <JobList jobs={historyJobs.slice(0, 6)} emptyTitle="No history jobs" subscriptionById={subscriptionById} onJobAction={onJobAction} />
-      </section>
+      </details>
     </>
   );
 }
@@ -604,29 +701,90 @@ function SubscriptionModal({
   );
 }
 
-function WindowList({ windows }: { windows: ArxivTaskQueryWindowRead[] }) {
+function WindowList({ windows, selectedRangeKey, saving, onSelectRange, onRetryWindow }: { windows: ArxivTaskQueryWindowRead[]; selectedRangeKey: string | null; saving: boolean; onSelectRange: (range: WindowRangeSelection) => void; onRetryWindow: (window: ArxivTaskQueryWindowRead) => void }) {
+  const timeline = buildWindowTimeline(windows);
   return (
-    <div className="task-window-rail">
-      {windows.map((window) => (
-        <article key={window.id} className="task-window-card">
-          <div className="meta-row">
-            <StatusBadge status={window.status} />
-            <span>{window.kind}</span>
-            <span>{formatDateTime(window.window_start)} to {formatDateTime(window.window_end)}</span>
-          </div>
-          <div className="task-window-card__bar" />
-          <p className="task-query-line">{window.query_snapshot}</p>
-          <div className="meta-row">
-            <span>{window.fetched_count} fetched</span>
-            <span>{window.inserted_count} new</span>
-            <span>{window.updated_count} updated</span>
-            {window.total_results != null && <span>{window.total_results} total</span>}
-            {window.warning_code && <span>{window.warning_code}</span>}
-          </div>
-        </article>
-      ))}
+    <div className="task-window-console">
+      <div className="task-window-summary">
+        <Metric label="windows" value={timeline.summary.totalWindows} />
+        <Metric label="coverage runs" value={timeline.summary.successSegmentCount} />
+        <Metric label="issues" value={timeline.summary.issueCount} />
+      </div>
+      <div className="task-window-range">
+        <span>{formatDateTime(timeline.summary.coverageStart)}</span>
+        <span>{formatDateTime(timeline.summary.coverageEnd)}</span>
+      </div>
+      <div className="task-window-timeline" aria-label="Retrieved window coverage timeline">
+        {timeline.segments.map((segment) => (
+          <WindowSegment key={segment.key} segment={segment} selected={selectedRangeKey === segment.key} onSelect={onSelectRange} />
+        ))}
+      </div>
+      <div className="task-window-detail-list">
+        {timeline.details.map((window) => {
+          const range = rangeFromWindow(window);
+          const actionLabel = windowRerunActionLabel(window.status);
+          return (
+            <article key={window.id} className={`task-window-detail-row task-window-detail-row--${window.status} ${selectedRangeKey === range.key ? 'is-selected' : ''}`}>
+              <button className="task-window-detail-main" type="button" onClick={() => onSelectRange(range)}>
+                <span className="meta-row">
+                  <StatusBadge status={window.status} />
+                  <span>{window.kind}</span>
+                  <span>{formatDateTime(window.window_start)} → {formatDateTime(window.window_end)}</span>
+                </span>
+                <span className="meta-row">
+                  <span>{window.fetched_count} fetched</span>
+                  <span>{window.inserted_count} new</span>
+                  <span>{window.updated_count} updated</span>
+                  {window.total_results != null && <span>{window.total_results} total</span>}
+                  {window.warning_code && <span>{window.warning_code}</span>}
+                </span>
+                {(window.error_message || window.warning_code) && <span className="task-error-text">{window.error_message ?? window.warning_code}</span>}
+              </button>
+              {actionLabel && <button className={window.status === 'failed' ? 'danger-button' : 'secondary-button'} type="button" disabled={saving} onClick={() => onRetryWindow(window)}>{actionLabel}</button>}
+            </article>
+          );
+        })}
+      </div>
     </div>
   );
+}
+
+function WindowSegment({ segment, selected, onSelect }: { segment: WindowTimelineSegment; selected: boolean; onSelect: (range: WindowRangeSelection) => void }) {
+  return (
+    <button
+      type="button"
+      className={`task-window-segment task-window-segment--${segment.kind} task-window-segment--${segment.status} ${selected ? 'is-selected' : ''}`}
+      style={{ '--window-width': `${segment.widthPercent}%`, '--window-intensity': String(segment.intensity) } as CSSProperties}
+      title={`${formatDateTime(segment.start)} → ${formatDateTime(segment.end)} · ${segment.status} · ${segment.fetchedCount} fetched`}
+      onClick={() => onSelect(rangeFromSegment(segment))}
+    >
+      <span>{segment.kind === 'gap' ? 'gap' : segment.windowIds.length}</span>
+    </button>
+  );
+}
+
+function rangeFromSegment(segment: WindowTimelineSegment): WindowRangeSelection {
+  return {
+    key: segment.key,
+    label: segment.kind === 'gap' ? `${formatDateTime(segment.start)} gap` : `${formatDateTime(segment.start)} → ${formatDateTime(segment.end)}`,
+    status: segment.status,
+    start: segment.start,
+    end: segment.end,
+    fetchedCount: segment.fetchedCount,
+    windowIds: segment.windowIds,
+  };
+}
+
+function rangeFromWindow(window: ArxivTaskQueryWindowRead): WindowRangeSelection {
+  return {
+    key: `window-${window.id}`,
+    label: `${formatDateTime(window.window_start)} → ${formatDateTime(window.window_end)}`,
+    status: window.status,
+    start: window.window_start,
+    end: window.window_end,
+    fetchedCount: window.fetched_count,
+    windowIds: [window.id],
+  };
 }
 
 function PaperList({ papers }: { papers: ArxivTaskPaperRead[] }) {
@@ -716,7 +874,7 @@ function JobList({ jobs, emptyTitle, subscriptionById, onJobAction, compact = fa
           </div>
           {onJobAction && (
             <div className="button-row">
-              <button className="secondary-button" type="button" disabled={job.status === 'running'} onClick={() => onJobAction(job, 'start')}>Start</button>
+              <button className="secondary-button" type="button" disabled={['running', 'stopped', 'succeeded'].includes(job.status)} onClick={() => onJobAction(job, 'start')}>Start</button>
               <button className="secondary-button" type="button" disabled={job.status !== 'running'} onClick={() => onJobAction(job, 'pause')}>Pause</button>
               <button className="danger-button" type="button" disabled={['stopped', 'succeeded'].includes(job.status)} onClick={() => onJobAction(job, 'stop')}>Stop</button>
             </div>

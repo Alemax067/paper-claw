@@ -121,10 +121,14 @@ class ArxivTaskRepository:
             )
         )
 
-    def list_papers(self, *, subscription_id: int | None = None, limit: int = 50, offset: int = 0) -> list[ArxivTaskPaper]:
+    def list_papers(self, *, subscription_id: int | None = None, published_start: datetime | None = None, published_end: datetime | None = None, limit: int = 50, offset: int = 0) -> list[ArxivTaskPaper]:
         statement = select(ArxivTaskPaper).order_by(ArxivTaskPaper.published_at.desc().nullslast(), ArxivTaskPaper.id.desc()).limit(limit).offset(offset)
         if subscription_id is not None:
             statement = statement.join(ArxivTaskPaperSubscription).where(ArxivTaskPaperSubscription.subscription_id == subscription_id)
+        if published_start is not None:
+            statement = statement.where(ArxivTaskPaper.published_at >= published_start)
+        if published_end is not None:
+            statement = statement.where(ArxivTaskPaper.published_at < published_end)
         return list(self.session.scalars(statement))
 
     def count_papers(self) -> int:

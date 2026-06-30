@@ -1,4 +1,4 @@
-from __future__ import annotations
+from datetime import datetime
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 import httpx
@@ -180,8 +180,17 @@ def list_arxiv_task_windows(subscription_id: int | None = None, limit: int = Que
 
 
 @router.get("/tasks/arxiv/papers", response_model=list[ArxivTaskPaperRead])
-def list_arxiv_task_papers(subscription_id: int | None = None, limit: int = Query(default=50, ge=1, le=200), offset: int = Query(default=0, ge=0), session: Session = Depends(get_db_session)) -> list[ArxivTaskPaperRead]:
-    return [arxiv_task_paper_read(paper) for paper in ArxivTaskRepository(session).list_papers(subscription_id=subscription_id, limit=limit, offset=offset)]
+def list_arxiv_task_papers(subscription_id: int | None = None, published_start: datetime | None = None, published_end: datetime | None = None, limit: int = Query(default=50, ge=1, le=200), offset: int = Query(default=0, ge=0), session: Session = Depends(get_db_session)) -> list[ArxivTaskPaperRead]:
+    return [
+        arxiv_task_paper_read(paper)
+        for paper in ArxivTaskRepository(session).list_papers(
+            subscription_id=subscription_id,
+            published_start=published_start,
+            published_end=published_end,
+            limit=limit,
+            offset=offset,
+        )
+    ]
 
 
 def _test_paper_read(entry: ArxivMetadataEntry) -> ArxivTaskSubscriptionTestPaperRead:

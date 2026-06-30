@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from backend.api.routers import tasks
-from backend.db.models import ArxivTaskSubscription
+from backend.db.models import ArxivTaskPaper, ArxivTaskPaperSubscription, ArxivTaskSubscription
 from backend.db.types import ArxivTaskJobStatus
 
 
@@ -75,7 +75,37 @@ def test_arxiv_task_subscription_test_query_reports_rate_limit(client, monkeypat
     assert response.json()["detail"] == "arXiv rate limit reached. Wait a few seconds and try again."
 
 
-def test_arxiv_history_job_validates_unknown_subscription_id(client, session):
+def test_arxiv_task_papers_accepts_published_window_filter(client, session):
+    subscription = ArxivTaskSubscription(name="Machine learning", query="cat:cs.LG", enabled=True)
+    paper = ArxivTaskPaper(
+        arxiv_id="2401.00001v1",
+        arxiv_base_id="2401.00001",
+        title="A harvested paper",
+        authors_json=["Ada Lovelace"],
+        categories_json=["cs.LG"],
+        published_at=datetime(2024, 1, 1, 12, tzinfo=UTC),
+        first_seen_at=datetime(2024, 1, 1, 12, tzinfo=UTC),
+        last_seen_at=datetime(2024, 1, 1, 12, tzinfo=UTC),
+        raw_json={},
+    )
+    session.add_all([subscription, paper])
+    session.flush()
+    session.add(ArxivTaskPaperSubscription(paper_id=paper.id, subscription_id=subscription.id, query_snapshot=subscription.query, created_at=datetime(2024, 1, 1, tzinfo=UTC)))
+    session.commit()
+
+    response = client.get(
+        "/api/tasks/arxiv/papers",
+        params={
+            "subscription_id": subscription.id,
+            "published_start": "2024-01-01T00:00:00Z",
+            "published_end": "2024-01-02T00:00:00Z",
+        },
+    )
+
+    assert response.status_code == 200
+    assert [item["arxiv_base_id"] for item in response.json()] == ["2401.00001"]
+
+
     start = datetime(2024, 1, 1, tzinfo=UTC)
     end = start + timedelta(days=1)
 

@@ -15,6 +15,7 @@ from backend.services.arxiv_tasks import ArxivTaskService
 @dataclass
 class FakeMetadataClient:
     total_results: int = 1
+    arxiv_base_id: str = "2401.00001"
     calls: list[tuple[str, datetime | None, datetime | None, int, int]] | None = None
     on_call: Callable[[], None] | None = None
 
@@ -33,8 +34,8 @@ class FakeMetadataClient:
         published_at = (start_time or datetime(2024, 1, 1, tzinfo=UTC)) + timedelta(minutes=5)
         updated_at = end_time or datetime(2024, 1, 2, tzinfo=UTC)
         entry = ArxivMetadataEntry(
-            arxiv_id="2401.00001v1",
-            arxiv_base_id="2401.00001",
+            arxiv_id=f"{self.arxiv_base_id}v1",
+            arxiv_base_id=self.arxiv_base_id,
             title="A harvested paper",
             abstract="abstract",
             authors=["Ada Lovelace"],
@@ -42,12 +43,12 @@ class FakeMetadataClient:
             categories=["cs.LG", "cs.AI"],
             published_at=published_at,
             updated_at=updated_at,
-            landing_page_url="https://arxiv.org/abs/2401.00001v1",
-            pdf_url="https://arxiv.org/pdf/2401.00001v1",
+            landing_page_url=f"https://arxiv.org/abs/{self.arxiv_base_id}v1",
+            pdf_url=f"https://arxiv.org/pdf/{self.arxiv_base_id}v1",
             doi=None,
             journal_ref=None,
             comment=None,
-            raw={"id": "2401.00001v1"},
+            raw={"id": f"{self.arxiv_base_id}v1"},
         )
         return ArxivMetadataQueryResponse(
             query_used=search_query,
@@ -124,6 +125,30 @@ def test_daily_queue_uses_latest_successful_coverage(session):
     window_calls = [(start, end) for _, start, end, _, _ in client.calls if start is not None and end is not None]
     assert window_calls
     assert all(end - start <= timedelta(days=1) for start, end in window_calls)
+
+
+def test_list_papers_filters_subscription_papers_by_published_window(session):
+    subscription = create_subscription(session)
+    client = FakeMetadataClient(arxiv_base_id="2401.00001")
+    service = ArxivTaskService(session, arxiv_client=client)
+    first_start = datetime(2024, 1, 1, tzinfo=UTC)
+    second_start = datetime(2024, 1, 2, tzinfo=UTC)
+
+    service.harvest_window(subscription, first_start, first_start + timedelta(hours=1), job_id=None, kind=ArxivTaskJobKind.history.value)
+    client.arxiv_base_id = "2401.00002"
+    service.harvest_window(subscription, second_start, second_start + timedelta(hours=1), job_id=None, kind=ArxivTaskJobKind.history.value)
+    session.commit()
+
+    papers = service.repository.list_papers(
+        subscription_id=subscription.id,
+        published_start=second_start,
+        published_end=second_start + timedelta(hours=1),
+        limit=20,
+        offset=0,
+    )
+
+    assert [paper.arxiv_base_id for paper in papers] == ["2401.00002"]
+    assert papers[0].published_at == second_start + timedelta(minutes=5)
 
 
 def test_daily_queue_allows_seconds_level_drift_without_tiny_remainder(session):

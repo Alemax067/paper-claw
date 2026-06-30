@@ -216,10 +216,16 @@ export const api = {
     }
     return requestJson<ArxivTaskQueryWindowRead[]>(`/api/tasks/arxiv/windows?${params.toString()}`, { cache: 'no-store' });
   },
-  listArxivTaskPapers: (subscriptionId?: number | null, limit = 50, offset = 0) => {
+  listArxivTaskPapers: (subscriptionId?: number | null, limit = 50, offset = 0, publishedStart?: string | null, publishedEnd?: string | null) => {
     const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
     if (subscriptionId) {
       params.set('subscription_id', String(subscriptionId));
+    }
+    if (publishedStart) {
+      params.set('published_start', publishedStart);
+    }
+    if (publishedEnd) {
+      params.set('published_end', publishedEnd);
     }
     return requestJson<ArxivTaskPaperRead[]>(`/api/tasks/arxiv/papers?${params.toString()}`, { cache: 'no-store' });
   },
