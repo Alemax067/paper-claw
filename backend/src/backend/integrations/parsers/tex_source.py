@@ -181,13 +181,16 @@ def _select_main_tex(tex_files: list[Path], source_root: Path) -> Path:
             value += 10
         if "\\begin{document}" in text:
             value += 10
-        if name in {"main.tex", "paper.tex", "ms.tex", "article.tex", "manuscript.tex"}:
+        if name in {"main.tex", "paper.tex", "ms.tex", "article.tex", "manuscript.tex", "main_arxiv.tex"}:
             value += 5
         if name.startswith("main"):
-            value += 2
+            value += 4
         if any(part in lowered_path for part in ("supplement", "appendix", "response", "rebuttal", "template")):
             value -= 5
+        if name.startswith("acl_") or "lualatex" in name or "xelatex" in name:
+            value -= 8
         value += min(len(re.findall(r"\\(?:section|subsection|subsubsection)\*?\{", text)), 8)
+        value += min(len(_INCLUDE_RE.findall(text)), 4)
         return value, -len(path.parts), -path.stat().st_size
 
     return max(tex_files, key=score)

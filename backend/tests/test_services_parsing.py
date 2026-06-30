@@ -109,6 +109,54 @@ def test_tex_source_parser_expands_includes_and_bibliography(tmp_path):
     assert "10.1000/test" in payload.json_content["references"][0]
 
 
+def test_tex_source_parser_prefers_real_main_over_acl_lualatex_template(tmp_path):
+    source = tmp_path / "source"
+    sections = source / "latex" / "tex"
+    sections.mkdir(parents=True)
+    (source / "main_arxiv.tex").write_text(
+        "\n".join(
+            [
+                r"\documentclass[11pt]{article}",
+                "% " + "long preamble filler " * 80,
+                r"\title{HyLaT: Efficient Multi-Agent Communication via \\ Hybrid Latent-Text Protocol}",
+                r"\begin{document}",
+                r"\maketitle",
+                r"\begin{abstract}Real abstract.\end{abstract}",
+                r"\input{latex/tex/1_intro}",
+                r"\end{document}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (sections / "1_intro.tex").write_text(r"\section{Introduction}Real paper body.", encoding="utf-8")
+    (source / "acl_lualatex.tex").write_text(
+        r"""
+\documentclass[11pt]{article}
+\title{LuaLaTeX and XeLaTeX Template for *ACL Style Files}
+\begin{document}
+\maketitle
+\section{Introduction}
+Please see the general instructions in the ACL template.
+\section{Example Appendix}
+This is an appendix.
+\end{document}
+""",
+        encoding="utf-8",
+    )
+    archive = tmp_path / "source.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        for path in sorted(source.rglob("*")):
+            tar.add(path, arcname=path.relative_to(source))
+
+    payload = TexSourceParser().parse(archive)
+
+    assert payload.json_content["main_tex"] == "main_arxiv.tex"
+    assert payload.json_content["used_files"] == ["main_arxiv.tex", "latex/tex/1_intro.tex"]
+    assert "# HyLaT: Efficient Multi-Agent Communication via" in payload.markdown_content
+    assert "Real paper body." in payload.markdown_content
+    assert "LuaLaTeX and XeLaTeX Template" not in payload.markdown_content
+
+
 def test_tex_source_parser_preserves_sections_after_display_math_and_layout_envs(tmp_path):
     tex = tmp_path / "main.tex"
     tex.write_text(
